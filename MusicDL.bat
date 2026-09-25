@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.20)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.21)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.20'
+$versionApp = '3.21'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -980,6 +980,7 @@ function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
     Add-Member -InputObject $estado -NotePropertyName Boton -NotePropertyValue $null
     Add-Member -InputObject $estado -NotePropertyName Drop -NotePropertyValue $null
     Add-Member -InputObject $estado -NotePropertyName CerrarSinReabrir -NotePropertyValue $false
+    Add-Member -InputObject $estado -NotePropertyName AlCambiar -NotePropertyValue $null
 
     $wrap = New-Object System.Windows.Forms.Panel
     $wrap.Location = New-Object System.Drawing.Point($x, $y)
@@ -1074,6 +1075,9 @@ function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
             if ($s2.SelectedIndex -ge 0) {
                 $info.est.SelectedIndex = $s2.SelectedIndex
                 $info.est.Boton.Text = "  $($info.est.Opciones[$info.est.SelectedIndex])"
+                if ($info.est.AlCambiar) {
+                    try { & $info.est.AlCambiar $info.est.SelectedIndex } catch {}
+                }
             }
             $info.drop.Close()
         }
@@ -1254,10 +1258,12 @@ $barPestanas.Size = New-Object System.Drawing.Size(740, 40)
 $barPestanas.BackColor = $colFondo
 $form.Controls.Add($barPestanas)
 
-$btnTabDesc = Nuevo-Boton $barPestanas 'DESCARGAR' 0 4 160 32
-$btnTabList = Nuevo-Boton $barPestanas 'MIS LISTAS' 168 4 160 32
+$btnTabDesc = Nuevo-Boton $barPestanas 'DESCARGAR' 0 4 150 32
+$btnTabList = Nuevo-Boton $barPestanas 'MIS LISTAS' 158 4 150 32
+$btnTabAjustes = Nuevo-Boton $barPestanas 'AJUSTES' 316 4 150 32
 $btnTabDesc.FlatAppearance.BorderSize = 0
 $btnTabList.FlatAppearance.BorderSize = 0
+$btnTabAjustes.FlatAppearance.BorderSize = 0
 
 $tabHost = New-Object System.Windows.Forms.Panel
 $tabHost.Location = New-Object System.Drawing.Point(20, 130)
@@ -1278,6 +1284,13 @@ $tab2.ForeColor = $colTexto
 $tab2.Visible = $false
 $tabHost.Controls.Add($tab2)
 
+$tab3 = New-Object System.Windows.Forms.Panel
+$tab3.Dock = 'Fill'
+$tab3.BackColor = $colPanel
+$tab3.ForeColor = $colTexto
+$tab3.Visible = $false
+$tabHost.Controls.Add($tab3)
+
 function Pintar-Pestanas {
     $activo = { param($b, $on)
         if ($on) {
@@ -1292,18 +1305,23 @@ function Pintar-Pestanas {
     }
     & $activo $btnTabDesc ($script:pestanaActual -eq 1)
     & $activo $btnTabList ($script:pestanaActual -eq 2)
+    & $activo $btnTabAjustes ($script:pestanaActual -eq 3)
 }
 
 function Mostrar-Pestana($n) {
     $script:pestanaActual = $n
     $tab1.Visible = ($n -eq 1)
     $tab2.Visible = ($n -eq 2)
-    if ($n -eq 1) { $tab1.BringToFront() } else { $tab2.BringToFront() }
+    $tab3.Visible = ($n -eq 3)
+    if ($n -eq 1) { $tab1.BringToFront() }
+    elseif ($n -eq 2) { $tab2.BringToFront() }
+    else { $tab3.BringToFront() }
     Pintar-Pestanas
 }
 
 $btnTabDesc.Add_Click({ Mostrar-Pestana 1 })
 $btnTabList.Add_Click({ Mostrar-Pestana 2 })
+$btnTabAjustes.Add_Click({ Mostrar-Pestana 3 })
 Pintar-Pestanas
 
 Nueva-Etiqueta $tab1 'ENLACES' 24 20 220 18 $fEtiqueta $colAcento | Out-Null
@@ -1394,6 +1412,48 @@ $btnQuitar    = Nuevo-Boton $tab2 'QUITAR' 536 510 180 48
 $chkNoPreguntar = Nueva-Casilla $tab2 'No preguntar si faltan temas (si los mueves a Rekordbox)' 24 576 $config.noPreguntarBorradas 680
 Nueva-Etiqueta $tab2 'Usa formato, carpetas y opciones de la pestaña Descargar.' 24 612 690 20 $fPequena $colTenue | Out-Null
 $lblListas = Nueva-Etiqueta $tab2 '' 24 640 690 22 $fNormal $colTexto
+
+# --- Pestaña AJUSTES ---
+function Indice-Drm-Yt {
+    if (-not $config.noPreguntarDrmYt) { return 0 }
+    if ($config.saltarDrmYtAuto) { return 1 }
+    return 2
+}
+function Aplicar-Indice-Drm-Yt($idx) {
+    switch ([int]$idx) {
+        1 { $config.noPreguntarDrmYt = $true;  $config.saltarDrmYtAuto = $true }
+        2 { $config.noPreguntarDrmYt = $true;  $config.saltarDrmYtAuto = $false }
+        default { $config.noPreguntarDrmYt = $false }
+    }
+}
+function Sync-Cmb-Drm-Yt {
+    if (-not $script:cmbDrmYt) { return }
+    $script:syncDrmUi = $true
+    try {
+        $idx = Indice-Drm-Yt
+        $script:cmbDrmYt.SelectedIndex = $idx
+        $script:cmbDrmYt.Boton.Text = "  $($script:cmbDrmYt.Opciones[$idx])"
+    } finally { $script:syncDrmUi = $false }
+}
+
+Nueva-Etiqueta $tab3 'AJUSTES' 24 20 400 18 $fEtiqueta $colAcento | Out-Null
+Nueva-Etiqueta $tab3 'PROTECCIÓN DRM' 24 64 400 18 $fEtiqueta $colAcento | Out-Null
+Nueva-Etiqueta $tab3 "Si una canción tiene DRM (protección anticopia) y no se puede bajar de la fuente,`nMusicDL puede buscar la misma en YouTube." 24 90 690 44 $fPequena $colSuave | Out-Null
+Nueva-Etiqueta $tab3 'COMPORTAMIENTO' 24 150 400 16 $fEtiqueta $colTenue | Out-Null
+$opcionesDrm = @(
+    'Preguntar siempre',
+    'Buscar en YouTube sin preguntar',
+    'No buscar en YouTube'
+)
+$script:cmbDrmYt = Nuevo-Combo $tab3 24 172 692 $opcionesDrm (Indice-Drm-Yt)
+$script:cmbDrmYt.AlCambiar = {
+    param($idx)
+    if ($script:syncDrmUi) { return }
+    Aplicar-Indice-Drm-Yt $idx
+    try { Guardar-Config-Disco } catch { Registrar-Error "Config DRM UI: $($_.Exception.Message)" }
+}
+$tips.SetToolTip($script:cmbDrmYt.Boton, "También se puede fijar desde el popup de DRM marcando «No volver a preguntar»:`nSí = buscar siempre · No = no buscar nunca.")
+Nueva-Etiqueta $tab3 'Puedes cambiarlo aquí en cualquier momento. El popup de DRM usa la misma preferencia.' 24 220 690 40 $fPequena $colTenue | Out-Null
 
 $btnAbrirUltima = Nuevo-Boton $form 'Última descarga' 20 940 170 36
 $btnAbrirUltima.Enabled = $false
@@ -1494,6 +1554,7 @@ function Guardar-Config {
     $config.bajarAlCopiar = $chkBajarCopiar.Checked
     $config.ventanaMini = $script:enMini
     $config.listas    = @($script:listas)
+    if ($script:cmbDrmYt) { Aplicar-Indice-Drm-Yt $script:cmbDrmYt.SelectedIndex }
     Guardar-Config-Disco
 }
 function Actualizar-Ayuda { $lblAyuda.Visible = ($txtEnlace.Text -eq '') }
@@ -1502,8 +1563,8 @@ function Modo($m) {
     $script:modo = $m
     $ocupado = ($m -ne $null)
     foreach ($c in @($cmbFormato, $cmbOrganizar, $btnCambiar, $chkPortada, $chkLimpiar,
-                     $chkSaltar, $lnkOlvidar, $btnElegir, $txtNuevaLista, $btnAnadir, $btnSyncTodas, $btnSyncUna, $btnQuitar, $chkNoPreguntar)) {
-        $c.Enabled = -not $ocupado
+                     $chkSaltar, $lnkOlvidar, $btnElegir, $txtNuevaLista, $btnAnadir, $btnSyncTodas, $btnSyncUna, $btnQuitar, $chkNoPreguntar, $script:cmbDrmYt)) {
+        if ($c) { $c.Enabled = -not $ocupado }
     }
     # Enlaces y pegar siguen activos para poder encolar
     $txtEnlace.Enabled = $true
@@ -2369,6 +2430,7 @@ function Preguntar-Salto-Drm($pendientes) {
         $config.noPreguntarDrmYt = $true
         $config.saltarDrmYtAuto = [bool]$ok
         try { Guardar-Config-Disco } catch { Registrar-Error "Config DRM: $($_.Exception.Message)" }
+        Sync-Cmb-Drm-Yt
     }
     return [bool]$ok
 }

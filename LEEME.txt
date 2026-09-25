@@ -1,4 +1,4 @@
-MusicDL v3.20
+MusicDL v3.21
 Made by WLY
 
 Uso
@@ -11,12 +11,13 @@ Uso
 
 Solo Windows 10/11. No hace falta Python ni Git.
 
-Novedades 3.18–3.20
+Novedades 3.18–3.21
 -------------------
 - Reintentos ante fallos de red; la playlist continúa si una canción falla
 - Mensajes de error más claros por canción
 - Actualización fiable de yt-dlp
-- Si una canción tiene DRM, al terminar pregunta si buscarla en YouTube
+- Si hay DRM: pregunta si buscar en YouTube (con «no volver a preguntar»)
+- Pestaña AJUSTES para cambiar el comportamiento DRM en cualquier momento
 
 Aviso legal
 -----------
