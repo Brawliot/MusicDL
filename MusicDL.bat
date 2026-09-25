@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.8)
+#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.9)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.8'
+$versionApp = '3.9'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -301,6 +301,11 @@ $herramientas = @(
         cmd = 'deno'; id = 'DenoLand.Deno'; nombre = 'el complemento para YouTube'
         url = 'https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip'
         tipo = 'zip-deno'; destino = 'deno.exe'
+    },
+    @{
+        cmd = 'spotdl'; id = ''; nombre = 'spotDL (Spotify)'
+        url = 'https://github.com/spotDL/spotify-downloader/releases/download/v4.5.2/spotdl-4.5.2-win32.exe'
+        tipo = 'exe-spotdl'; destino = 'spotdl.exe'
     }
 )
 
@@ -369,42 +374,25 @@ function Url-Spotdl-Windows {
 }
 
 function Instalar-Spotdl {
-    $destino = Join-Path $dirBin 'spotdl.exe'
-    if (Test-Path -LiteralPath $destino) { return $true }
-    $url = Url-Spotdl-Windows
-    $tmp = Join-Path $dirApp 'dl-spotdl.tmp'
-    if (-not (Descargar-Http $url $tmp)) { return $false }
-    try {
-        Move-Item -LiteralPath $tmp -Destination $destino -Force
-        return $true
-    } catch {
-        Registrar-Error "Instalar spotDL: $($_.Exception.Message)"
-        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        return $false
-    }
+    $h = $herramientas | Where-Object { $_.cmd -eq 'spotdl' } | Select-Object -First 1
+    if (-not $h) { return $false }
+    if (Test-Path -LiteralPath (Join-Path $dirBin 'spotdl.exe')) { return $true }
+    return (Instalar-Herramienta-Directa $h)
 }
 
 function Preparar-Spotdl {
     if ($script:tarea -and $script:modo -eq $null) { Abandonar-Tarea; $lblAct.Text = '' }
     Refrescar-Path
     $s = Ruta-De 'spotdl'
-    if ($s) { return $s }
-
-    $script:pop = Nuevo-Popup 'Instalando spotDL' "Hace falta para descargar desde Spotify.`nSe baja una sola vez (~45 MB). No cierres esta ventana."
-    $script:pop.form.ShowInTaskbar = $true
-    $script:pop.form.Add_Shown({
-        $script:pop.paso.Text = 'Descargando spotDL desde GitHub...'
-        [System.Windows.Forms.Application]::DoEvents()
-        $ok = Instalar-Spotdl
-        if (-not $ok) { $script:pop.paso.Text = 'Error al descargar spotDL.' }
-        Start-Sleep -Milliseconds 400
-        Cerrar-Popup
-    })
-    [void]$script:pop.form.ShowDialog()
+    if ($s -and (Ruta-De 'ffmpeg') -and (Ruta-De 'deno')) { return $s }
+    if (-not (Instalar-Si-Falta)) { return $null }
     Refrescar-Path
     $s = Ruta-De 'spotdl'
     if (-not $s) {
-        Aviso "No se pudo instalar spotDL.`n`nComprueba internet y vuelve a intentarlo." 'Warning'
+        Aviso "No se pudo instalar spotDL.`n`nComprueba internet y vuelve a abrir el programa." 'Warning'
+    } elseif (-not (Ruta-De 'ffmpeg') -or -not (Ruta-De 'deno')) {
+        Aviso "Faltan FFmpeg o Deno (necesarios para Spotify). Cierra y vuelve a abrir el programa." 'Warning'
+        return $null
     }
     return $s
 }
@@ -673,9 +661,10 @@ function Extraer-Zip-Selectivo($zipPath, $patronExe, $destinoExe) {
 function Instalar-Herramienta-Directa($h) {
     $destino = Join-Path $dirBin $h.destino
     $tmp = Join-Path $dirApp ('dl-' + $h.cmd + '.tmp')
-    if (-not (Descargar-Http $h.url $tmp)) { return $false }
+    $url = if ($h.tipo -eq 'exe-spotdl') { Url-Spotdl-Windows } else { $h.url }
+    if (-not (Descargar-Http $url $tmp)) { return $false }
     try {
-        if ($h.tipo -eq 'exe') {
+        if ($h.tipo -eq 'exe' -or $h.tipo -eq 'exe-spotdl') {
             Move-Item -LiteralPath $tmp -Destination $destino -Force
             return $true
         }
@@ -783,7 +772,7 @@ function Instalar-Si-Falta {
                 # Respaldo winget si existe
                 $wg = Ruta-De 'winget'
                 if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
-                if ($wg) {
+                if ($wg -and $h.id) {
                     $script:pop.paso.Text = "Paso $i : intentando con el instalador de Windows..."
                     [System.Windows.Forms.Application]::DoEvents()
                     try {
@@ -801,7 +790,7 @@ function Instalar-Si-Falta {
     $falta = Faltan
     if ($falta.Count -gt 0) {
         [System.Windows.Forms.MessageBox]::Show(
-            "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet y vuelve a abrir el programa.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg y Deno.",
+            "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet y vuelve a abrir el programa.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.",
             'Descargar música', 'OK', 'Warning') | Out-Null
         return $false
     }
@@ -1721,6 +1710,11 @@ function Preparar-Ytdlp {
     if ($script:tarea -and $script:modo -eq $null) { Abandonar-Tarea; $lblAct.Text = '' }
     Refrescar-Path
     $ytdlp = Ruta-De 'yt-dlp'
+    if (-not $ytdlp -or -not (Ruta-De 'ffmpeg')) {
+        if (-not (Instalar-Si-Falta)) { return $null }
+        Refrescar-Path
+        $ytdlp = Ruta-De 'yt-dlp'
+    }
     if (-not $ytdlp) { Aviso 'Falta el descargador. Cierra el programa y vuelve a abrirlo para que se instale.' 'Warning' }
     return $ytdlp
 }
@@ -1835,6 +1829,13 @@ function Construir-Args-Spotdl($enlaces, $sync) {
     $ff = Ruta-De 'ffmpeg'
     if ($ff) { [void]$a.Add('--ffmpeg'); [void]$a.Add((Q $ff)) }
 
+    # YouTube Music primero; YouTube como respaldo. Deno en PATH evita AudioProviderError.
+    [void]$a.Add('--audio'); [void]$a.Add('youtube-music'); [void]$a.Add('youtube')
+    $deno = Ruta-De 'deno'
+    if ($deno) {
+        [void]$a.Add('--yt-dlp-args'); [void]$a.Add((Q "--js-runtimes deno:$deno"))
+    }
+
     switch ($cmbOrganizar.SelectedIndex) {
         0 { $plantilla = '{title}.{output-ext}' }
         1 { $plantilla = '{list-name}/{list-position} - {title}.{output-ext}' }
@@ -1899,12 +1900,15 @@ function Procesar-Linea-Spotdl($l) {
 function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     $spotdl = Preparar-Spotdl
     if (-not $spotdl) { return }
-    # spotDL necesita FFmpeg; yt-dlp suele venir embebido en el .exe, pero si está en bin lo usamos vía PATH
+    Refrescar-Path
     if (-not (Ruta-De 'ffmpeg')) {
         Aviso 'Falta FFmpeg (necesario para spotDL). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
         return
     }
-    Refrescar-Path
+    if (-not (Ruta-De 'deno')) {
+        Aviso 'Falta Deno (necesario para bajar el audio de YouTube vía Spotify). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
+        return
+    }
 
     $carpeta = $txtCarpeta.Text.TrimEnd('\')
     try { New-Item -ItemType Directory -Force -Path $carpeta -ErrorAction Stop | Out-Null } catch {
@@ -2394,7 +2398,7 @@ CÓMO DESCARGAR
 2. Pégalo aquí (o usa la ventana Mini con "Bajar al copiar").
 3. Pulsa Descargar. Si ya está descargando, se añade a la cola.
 
-Spotify: se descarga con spotDL (se instala solo la primera vez). Busca cada canción en YouTube/YouTube Music y la guarda con metadatos de Spotify. La calidad es la del vídeo encontrado, no la de Spotify Premium.
+Spotify: se descarga con spotDL (se instala al abrir el programa la primera vez, junto a yt-dlp/FFmpeg/Deno). Busca cada canción en YouTube/YouTube Music y la guarda con metadatos de Spotify. La calidad es la del vídeo encontrado, no la de Spotify Premium.
 
 FORMATO PARA DJs
 - "Original (sin convertir)" guarda el audio tal cual lo envía la web: es la mejor calidad posible.
