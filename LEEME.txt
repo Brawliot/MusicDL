@@ -3,7 +3,7 @@ Made by WLY
 
 Uso
 ---
-1. Extrae este ZIP (o descarga solo MusicDL.bat)
+1. Extrae este ZIP (MusicDL.bat y MusicDL.bat.sig van juntos; la firma es obligatoria)
 2. Abre MusicDL.bat
 3. Si Windows avisa: Más información → Ejecutar de todas formas
 4. Acepta el aviso legal la primera vez
@@ -15,8 +15,8 @@ Por defecto: modo simple (MP3) y destino «Música descargada». Pulsa «Más op
 Spotify: se busca la canción en YouTube (te lo avisa la primera vez).
 
 Solo Windows 10/11. No hace falta Python ni Git.
-Para arrancar y actualizar, MusicDL.bat.sig debe estar junto al .bat (firma RSA-PSS obligatoria).
 Idioma: español o English en la pestaña AJUSTES.
+La release en GitHub publica solo el ZIP (no el .bat suelto).
 
 Novedades 3.40
 --------------

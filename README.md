@@ -16,7 +16,7 @@ Descarga música desde **YouTube**, **SoundCloud** y **Spotify** en Windows.
 ## Cómo usarlo
 
 1. Ve a [Releases](https://github.com/Brawliot/MusicDL/releases/latest)
-2. Descarga **MusicDL.bat** (lo más fácil) **o** genera/descarga **MusicDL.zip**
+2. Descarga **MusicDL.zip** y extráelo (`MusicDL.bat` + `MusicDL.bat.sig` van juntos; la firma es obligatoria)
 3. Abre **MusicDL.bat**
 4. Si Windows avisa: *Más información* → *Ejecutar de todas formas*
 5. Acepta el aviso legal y el tutorial de 3 pasos la primera vez
@@ -24,8 +24,6 @@ Descarga música desde **YouTube**, **SoundCloud** y **Spotify** en Windows.
 7. Pega el enlace y pulsa **Descargar**
 
 Por defecto: modo simple y carpeta «Música descargada». Usa **Más opciones** para formato y organización.
-
-Para arrancar y actualizar hace falta **MusicDL.bat.sig** en la misma carpeta que el `.bat` (firma RSA obligatoria).
 
 **Solo Windows 10/11.** No hace falta Python ni Git.
 
