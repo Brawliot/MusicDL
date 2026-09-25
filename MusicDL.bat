@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.9)
+#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.10)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.9'
+$versionApp = '3.10'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -215,9 +215,9 @@ $config = [ordered]@{
     formato            = 0
     organizar          = 1
     carpeta            = (Join-Path ([Environment]::GetFolderPath('MyMusic')) 'Música descargada')
-    portada            = $true
-    limpiar            = $true
-    saltar             = $true
+    portada            = $false
+    limpiar            = $false
+    saltar             = $false
     accesoCreado       = $false
     listas             = @()
     noPreguntarBorradas = $false
@@ -242,6 +242,12 @@ function Cargar-Config {
                 $config.formato = [Math]::Min($f + 1, $formatos.Count - 1)
             }
         }
+        # v3.10: las casillas no se premarcan; el usuario elige
+        if (-not ($leido.PSObject.Properties.Name -contains 'checksManuales')) {
+            $config.portada = $false
+            $config.limpiar = $false
+            $config.saltar = $false
+        }
     } catch {
         Registrar-Error "No se pudo leer config: $($_.Exception.Message)"
     }
@@ -258,6 +264,7 @@ function Guardar-Config-Disco {
     if ($script:desinstalado) { return }
     try {
         $config.formatoV3 = $true
+        $config.checksManuales = $true
         $json = ($config | ConvertTo-Json -Depth 5)
         [IO.File]::WriteAllText($archConfigTmp, $json, [Text.UTF8Encoding]::new($false))
         if (Test-Path -LiteralPath $archConfig) {
@@ -2257,7 +2264,7 @@ function Mostrar-Selector($lista) {
         $etiqueta = ('{0:00}   {1}' -f $x.idx, $t)
         $tiene = $ya.ContainsKey($x.id)
         if ($tiene) { $etiqueta += '   (ya la tienes en este formato)' }
-        [void]$cl.Items.Add($etiqueta, (-not $tiene))
+        [void]$cl.Items.Add($etiqueta, $false)
     }
     $cl.Add_ItemCheck({ param($s, $e)
         $n = $cl.CheckedItems.Count + $(if ($e.NewValue -eq 'Checked') { 1 } else { -1 })
