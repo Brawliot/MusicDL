@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.21)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.22)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.21'
+$versionApp = '3.22'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -1342,7 +1342,7 @@ $btnBorrar = Nuevo-Boton $tab1 'BORRAR' 600 96 116 42
 Nueva-Etiqueta $tab1 'SALIDA' 24 164 220 18 $fEtiqueta $colAcento | Out-Null
 Nueva-Etiqueta $tab1 'FORMATO' 24 190 340 16 $fEtiqueta $colTenue | Out-Null
 $cmbFormato = Nuevo-Combo $tab1 24 210 340 $formatosEtiqueta $config.formato
-$tips.SetToolTip($cmbFormato, "Original: deja el audio tal como lo envía la web (mejor opción para DJs).`nConvertir a FLAC/WAV/MP3 320 NO mejora el sonido de YouTube ni SoundCloud.")
+$tips.SetToolTip($cmbFormato.Boton, "Original: deja el audio tal como lo envía la web (mejor opción para DJs).`nConvertir a FLAC/WAV/MP3 320 NO mejora el sonido de YouTube ni SoundCloud.")
 
 Nueva-Etiqueta $tab1 'CARPETAS' 384 190 340 16 $fEtiqueta $colTenue | Out-Null
 $cmbOrganizar = Nuevo-Combo $tab1 384 210 332 @(
