@@ -8,7 +8,7 @@ Descarga música desde **YouTube**, **SoundCloud** y **Spotify** en Windows.
 - Spotify: spotDL empareja en YouTube; yt-dlp descarga
 - Actualizaciones firmadas RSA
 
-**Versión actual:** 3.17 · Made by WLY
+**Versión actual:** 3.20 · Made by WLY
 
 ---
 

@@ -27,12 +27,14 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.17)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.20)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.17'
+$versionApp = '3.20'
+$script:sugerirUpdateYtdlp = $false
+$script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -226,6 +228,8 @@ $config = [ordered]@{
     accesoCreado       = $false
     listas             = @()
     noPreguntarBorradas = $false
+    noPreguntarDrmYt   = $false
+    saltarDrmYtAuto    = $true
     bajarAlCopiar      = $false
     ventanaMini        = $false
 }
@@ -862,42 +866,46 @@ function Instalar-Si-Falta {
     return $true
 }
 
-function Actualizar-Herramientas-Directas {
-    # Como máximo una vez al día: yt-dlp -U (rápido) o redescarga si falla
+function Actualizar-Herramientas-Directas([switch]$Forzar) {
+    # Actualiza yt-dlp en dirBin desde GitHub (más fiable que -U en copias de winget).
     $stamp = Join-Path $dirApp 'ultimo-update-ytdlp.txt'
-    try {
-        if (Test-Path -LiteralPath $stamp) {
-            $rawStamp = (Get-Content -LiteralPath $stamp -Raw -ErrorAction SilentlyContinue)
-            if ($rawStamp) {
-                $hace = (Get-Date) - [datetime]($rawStamp.Trim())
-                if ($hace.TotalHours -lt 20) { $lblAct.Text = 'Todo al día'; return }
-            }
-        }
-    } catch {}
-    $y = Ruta-De 'yt-dlp'
-    if (-not $y) { $lblAct.Text = 'Todo al día'; return }
-    try {
-        $p = Start-Process -FilePath $y -ArgumentList @('-U') -Wait -PassThru -WindowStyle Hidden
-        $script:versionYtdlp = $null
-        try { Set-Content -LiteralPath $stamp -Value ((Get-Date).ToString('o')) -Encoding UTF8 } catch {}
-        if ($null -ne $p -and $p.ExitCode -eq 0) { $lblAct.Text = 'Actualizado' } else { $lblAct.Text = 'Todo al día' }
-    } catch {
-        Registrar-Error "Actualizar yt-dlp (-U): $($_.Exception.Message)"
+    if (-not $Forzar) {
         try {
-            $h = $herramientas | Where-Object { $_.cmd -eq 'yt-dlp' } | Select-Object -First 1
-            if ($h -and (Instalar-Herramienta-Directa $h)) {
-                Refrescar-Path
-                $script:versionYtdlp = $null
-                $lblAct.Text = 'Actualizado'
-                Set-Content -LiteralPath $stamp -Value ((Get-Date).ToString('o')) -Encoding UTF8
-            } else {
-                $lblAct.Text = 'Todo al día'
+            if (Test-Path -LiteralPath $stamp) {
+                $rawStamp = (Get-Content -LiteralPath $stamp -Raw -ErrorAction SilentlyContinue)
+                if ($rawStamp) {
+                    $hace = (Get-Date) - [datetime]($rawStamp.Trim())
+                    if ($hace.TotalHours -lt 20) {
+                        $lblAct.Text = 'yt-dlp al día'
+                        return
+                    }
+                }
             }
-        } catch {
-            $lblAct.Text = 'Todo al día'
+        } catch {}
+    }
+    $lblAct.Text = 'Actualizando yt-dlp...'
+    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+    $ok = $false
+    $h = $herramientas | Where-Object { $_.cmd -eq 'yt-dlp' } | Select-Object -First 1
+    if ($h) {
+        try { $ok = Instalar-Herramienta-Directa $h } catch {
             Registrar-Error "Actualizar yt-dlp (directa): $($_.Exception.Message)"
         }
     }
+    if (-not $ok) {
+        $y = Ruta-De 'yt-dlp'
+        if ($y) {
+            try {
+                $p = Start-Process -FilePath $y -ArgumentList @('-U') -Wait -PassThru -WindowStyle Hidden
+                $ok = ($null -ne $p -and $p.ExitCode -eq 0)
+            } catch { Registrar-Error "Actualizar yt-dlp (-U): $($_.Exception.Message)" }
+        }
+    }
+    Refrescar-Path
+    $script:versionYtdlp = $null
+    $ver = Obtener-Version-Ytdlp
+    try { Set-Content -LiteralPath $stamp -Value ((Get-Date).ToString('o')) -Encoding UTF8 } catch {}
+    $lblAct.Text = "yt-dlp $ver"
 }
 
 # ================================================================
@@ -1647,7 +1655,7 @@ function Traducir-Error($l) {
         'getaddrinfo|Failed to resolve|timed out|Connection refused|No route to host|Network is unreachable|Connection reset|RemoteDisconnected' {
             return @{ origen = 'Tu conexión'; texto = 'No hay internet o va muy lenta. Comprueba la conexión y vuelve a intentarlo.' } }
         'DRM protected|DRM-protected' {
-            return @{ origen = $web; texto = 'Está protegida contra copia (DRM) y la web no permite descargarla.' } }
+            return @{ origen = $web; texto = 'Está protegida contra copia (DRM). Al terminar se preguntará si buscarla en YouTube.' } }
         'Private video|This video is private|Video unavailable|not available|has been removed|HTTP Error 404' {
             return @{ origen = $web; texto = 'La canción no está disponible o es privada.' } }
         'not a bot|Sign in to confirm|HTTP Error 429|Too Many Requests' {
@@ -1667,7 +1675,7 @@ function Poner-Barra($pctCancion = 0) {
     $d = $script:dl
     if (-not $d) { return }
     $total = [Math]::Max([int]$d.total, 1)
-    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores
+    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores + [int]$d.drmMarcados
     if ($total -gt 1) {
         # Canción actual: la siguiente a las ya hechas, o el índice de playlist si existe
         $idx = [int]$d.actual
@@ -1692,7 +1700,7 @@ function Poner-Barra-Canciones {
     $d = $script:dl
     if (-not $d) { return }
     $total = [Math]::Max([int]$d.total, 1)
-    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores
+    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores + [int]$d.drmMarcados
     $v = [Math]::Min($hechos / $total, 1.0)
     $valor = [int]($v * 1000)
     Set-BarraValor $barra $valor
@@ -1714,7 +1722,9 @@ function Marcar-Completado($ruta) {
     if ($d.listaActual) { $d.nuevasPorLista[$d.listaActual] = 1 + [int]$d.nuevasPorLista[$d.listaActual] }
     $nombre = [IO.Path]::GetFileNameWithoutExtension($ruta)
     $extra = if ($d.calidad) { "  [$($d.calidad)]" } else { '' }
-    $tag = if ($d.motor -eq 'spotify-yt' -or $d.motor -eq 'spotdl') { '  [Spotify→YT]' } else { '' }
+    $tag = if ($d.saltandoDrm) { '  [DRM→YouTube]' }
+           elseif ($d.motor -eq 'spotify-yt' -or $d.motor -eq 'spotdl') { '  [Spotify→YT]' }
+           else { '' }
     Resultado ([string][char]0x2713 + '  ' + $nombre + $extra + $tag)
     Estado "Guardado:`n$nombre"
     $d.actual = [Math]::Max([int]$d.actual, [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores)
@@ -1816,12 +1826,52 @@ function Procesar-Linea($l) {
         return
     }
     if ($l -match '^ERROR:') {
+        if ($l -match 'HTTP Error 403|Unable to extract|nsig|Signature|Requested format|JavaScript|jsc') {
+            $script:sugerirUpdateYtdlp = $true
+        }
+        # DRM: encolar búsqueda en YouTube (o marcar fallo si ya estamos en el salto)
+        if ($l -match '(?i)DRM protected|DRM-protected') {
+            if ($d.saltandoDrm) {
+                $d.drmFallbackFallo = $true
+                return
+            }
+            $quien = if ($d.titulo) { $d.titulo } elseif ($d.total -gt 1) { "Canción $($d.actual) de $($d.total)" } else { '' }
+            if (-not $quien) {
+                $d.nErrores++
+                $lineaErr = 'Canción con DRM — no pude leer el título para buscarla en YouTube.'
+                Resultado ([string][char]0x2717 + '  ' + $lineaErr)
+                if (-not $d.errores.Contains($lineaErr)) { [void]$d.errores.Add($lineaErr) }
+                Poner-Barra-Canciones
+                return
+            }
+            if (-not $d.drmPendientes) { $d.drmPendientes = New-Object System.Collections.ArrayList }
+            $ya = $false
+            foreach ($p in @($d.drmPendientes)) {
+                if ([string]$p.titulo -eq $quien) { $ya = $true; break }
+            }
+            if (-not $ya) {
+                [void]$d.drmPendientes.Add(@{ titulo = $quien })
+                $d.drmMarcados = 1 + [int]$d.drmMarcados
+                Resultado ([string][char]0x2298 + '  DRM: ' + $quien + ' — al terminar te preguntaré si buscarla en YouTube')
+                Estado ("DRM detectado. Al terminar te preguntaré:`n{0}" -f $quien)
+            }
+            Poner-Barra-Canciones
+            return
+        }
+        if ($d.saltandoDrm) {
+            $d.drmFallbackFallo = $true
+            return
+        }
         $err = Traducir-Error $l
         $txt = "$($err.origen): $($err.texto)"
         $d.nErrores++
-        $quien = if ($d.titulo) { $d.titulo } elseif ($d.total -gt 1) { "Canción $($d.actual) de $($d.total)" } else { 'La canción' }
-        Resultado ([string][char]0x2717 + '  ' + $quien + '  —  ' + $txt)
-        if (-not $d.errores.Contains($txt)) { [void]$d.errores.Add($txt) }
+        $quien = if ($d.titulo) { $d.titulo } elseif ($d.total -gt 1) { "Canción $($d.actual) de $($d.total)" } else { 'Canción sin título' }
+        $lineaErr = "$quien — $txt"
+        Resultado ([string][char]0x2717 + '  ' + $lineaErr)
+        if (-not $d.errores.Contains($lineaErr)) { [void]$d.errores.Add($lineaErr) }
+        if ($d.total -gt 1) {
+            Estado ("Falló una canción; continúo con el resto...`n{0}" -f $quien)
+        }
         Poner-Barra-Canciones
     }
 }
@@ -1867,6 +1917,13 @@ function Construir-Args($enlaces, $sync, $indices) {
     $a = New-Object System.Collections.Generic.List[string]
     $a.AddRange([string[]]@('--newline', '--progress', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
     $a.Add('--concurrent-fragments'); $a.Add('4')
+    # Robustez: reintentos y no abortar toda la lista si una canción falla
+    $a.Add('--retries'); $a.Add('10')
+    $a.Add('--fragment-retries'); $a.Add('10')
+    $a.Add('--extractor-retries'); $a.Add('3')
+    $a.Add('--retry-sleep'); $a.Add('1')
+    $a.Add('--ignore-errors')
+    $a.Add('--no-abort-on-error')
 
     $ff = Ruta-De 'ffmpeg'
     if ($ff) { $a.Add('--ffmpeg-location'); $a.Add((Q (Split-Path -Parent $ff))) }
@@ -1952,6 +2009,8 @@ function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
         carpetaEscaneo = $null; motor = 'yt-dlp'
         completados = New-Object System.Collections.Generic.List[string]
         indiceUrl = 0
+        drmPendientes = New-Object System.Collections.ArrayList
+        drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = $indices; motor = 'yt-dlp' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2043,8 +2102,13 @@ function Procesar-Linea-Spotdl($l) {
         $d.nErrores++
         $txt = $l.Trim()
         if ($txt.Length -gt 180) { $txt = $txt.Substring(0, 180) + '…' }
-        Resultado ([string][char]0x2717 + '  ' + $txt)
-        if (-not $d.errores.Contains($txt)) { [void]$d.errores.Add($txt) }
+        $quien = if ($d.titulo) { $d.titulo } else { 'Canción Spotify' }
+        $lineaErr = "$quien — $txt"
+        Resultado ([string][char]0x2717 + '  ' + $lineaErr)
+        if (-not $d.errores.Contains($lineaErr)) { [void]$d.errores.Add($lineaErr) }
+        if ($d.total -gt 1) {
+            Estado ("Falló una canción; continúo con el resto...`n{0}" -f $quien)
+        }
     }
 }
 
@@ -2124,6 +2188,14 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
         $script:pop.paso.Text = 'Emparejando con YouTube...'
         [System.Windows.Forms.Application]::DoEvents()
         $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
+        if ($script:ytResueltosSp.Count -eq 0 -and -not $script:popupCancelado) {
+            $script:pop.paso.Text = 'Sin resultados. Reintentando emparejado...'
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Seconds 2
+            if (-not $script:popupCancelado) {
+                $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
+            }
+        }
         if (-not $script:popupCancelado) {
             Start-Sleep -Milliseconds 150
             Cerrar-Popup
@@ -2160,6 +2232,8 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
         carpetaEscaneo = $null; motor = 'spotify-yt'
         completados = New-Object System.Collections.Generic.List[string]
         indiceUrl = 0
+        drmPendientes = New-Object System.Collections.ArrayList
+        drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2227,6 +2301,193 @@ function Procesar-Cola {
     return $true
 }
 
+function Preguntar-Salto-Drm($pendientes) {
+    # Devuelve $true si el usuario quiere buscar en YouTube.
+    # Respeta "No volver a preguntar" guardado en config.
+    if ($config.noPreguntarDrmYt) { return [bool]$config.saltarDrmYtAuto }
+
+    $titulos = @($pendientes | ForEach-Object { [string]$_.titulo } | Where-Object { $_ })
+    $n = $titulos.Count
+    if ($n -eq 0) { return $false }
+
+    $f = New-Object System.Windows.Forms.Form
+    Escalar-Dpi $f
+    $f.Text = 'MusicDL'
+    $f.ClientSize = New-Object System.Drawing.Size(520, 320)
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false
+    $f.MinimizeBox = $false
+    $f.StartPosition = 'CenterParent'
+    $f.BackColor = $colPanel
+    $f.ForeColor = $colTexto
+    $f.Font = $fNormal
+    $f.ShowInTaskbar = $false
+    if ($script:icono) { $f.Icon = $script:icono }
+
+    $barraTop = New-Object System.Windows.Forms.Panel
+    $barraTop.BackColor = $colAcento
+    $barraTop.Location = New-Object System.Drawing.Point(0, 0)
+    $barraTop.Size = New-Object System.Drawing.Size(520, 4)
+    $f.Controls.Add($barraTop)
+
+    Nueva-Etiqueta $f 'PROTECCIÓN DRM' 24 24 470 22 $fEtiqueta $colAcento | Out-Null
+
+    $intro = if ($n -eq 1) {
+        "Esta canción tiene DRM (protección anticopia) y no se pudo bajar de la fuente original:"
+    } else {
+        "$n canciones tienen DRM y no se pudieron bajar de la fuente original:"
+    }
+    Nueva-Etiqueta $f $intro 24 52 470 40 $fNormal $colSuave | Out-Null
+
+    $lst = New-Object System.Windows.Forms.ListBox
+    $lst.Location = New-Object System.Drawing.Point(24, 96)
+    $lst.Size = New-Object System.Drawing.Size(472, 88)
+    $lst.BackColor = $colCampo
+    $lst.ForeColor = $colTexto
+    $lst.BorderStyle = 'FixedSingle'
+    $lst.IntegralHeight = $false
+    foreach ($t in ($titulos | Select-Object -First 20)) { [void]$lst.Items.Add($t) }
+    if ($n -gt 20) { [void]$lst.Items.Add("… y $($n - 20) más") }
+    $f.Controls.Add($lst)
+
+    Nueva-Etiqueta $f '¿Quieres que intentemos descargar esto en YouTube?' 24 196 470 24 $fNormal $colTexto | Out-Null
+
+    $chk = Nueva-Casilla $f 'No volver a preguntar' 24 228 $false 300
+
+    $btnSi = Nuevo-BotonPrincipal $f 'Sí' 250 262 110 36 $fNormal
+    $btnNo = Nuevo-Boton $f 'No' 370 262 110 36
+    $btnSi.DialogResult = 'Yes'
+    $btnNo.DialogResult = 'No'
+    $f.AcceptButton = $btnSi
+    $f.CancelButton = $btnNo
+
+    $owner = if ($script:enMini) { $formMini } else { $form }
+    $dr = $f.ShowDialog($owner)
+    $ok = ($dr -eq 'Yes')
+
+    if ($chk.Checked) {
+        $config.noPreguntarDrmYt = $true
+        $config.saltarDrmYtAuto = [bool]$ok
+        try { Guardar-Config-Disco } catch { Registrar-Error "Config DRM: $($_.Exception.Message)" }
+    }
+    return [bool]$ok
+}
+
+function Marcar-Drm-Sin-Salto($d) {
+    if (-not $d.drmPendientes) { return }
+    foreach ($p in @($d.drmPendientes)) {
+        $tit = [string]$p.titulo
+        if (-not $tit) { $tit = 'Canción' }
+        $d.nErrores++
+        $msg = "$tit — Tiene DRM y no se buscó alternativa en YouTube."
+        Resultado ([string][char]0x2717 + '  ' + $msg)
+        if (-not $d.errores.Contains($msg)) { [void]$d.errores.Add($msg) }
+    }
+    $d.drmPendientes.Clear()
+    $d.drmMarcados = 0
+}
+
+function Intentar-Saltos-Drm($d) {
+    # Tras la descarga principal: canciones con DRM → buscar la misma en YouTube.
+    if (-not $d -or -not $d.drmPendientes -or $d.drmPendientes.Count -eq 0) { return }
+    $pend = @($d.drmPendientes)
+    $d.drmPendientes.Clear()
+    $d.drmMarcados = 0
+    $ytdlp = Ruta-De 'yt-dlp'
+    $n = $pend.Count
+    $i = 0
+    foreach ($p in $pend) {
+        if ($d.cancelada) { return }
+        $i++
+        $titulo = [string]$p.titulo
+        if (-not $titulo) {
+            $d.nErrores++
+            $msg = 'Canción con DRM — no pude leer el título para buscarla en YouTube.'
+            Resultado ([string][char]0x2717 + '  ' + $msg)
+            if (-not $d.errores.Contains($msg)) { [void]$d.errores.Add($msg) }
+            continue
+        }
+        if (-not $ytdlp) {
+            $d.nErrores++
+            $msg = "$titulo — Tiene DRM; intenté buscar en YouTube pero falta el descargador."
+            Resultado ([string][char]0x2717 + '  ' + $msg)
+            if (-not $d.errores.Contains($msg)) { [void]$d.errores.Add($msg) }
+            continue
+        }
+
+        Estado ("DRM: buscando alternativa en YouTube ($i/$n):`n$titulo")
+        Resultado ([string][char]0x2192 + '  DRM — buscando en YouTube: ' + $titulo)
+        try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+
+        $query = ($titulo -replace '[\r\n\t]+', ' ').Trim()
+        if ($query.Length -gt 100) { $query = $query.Substring(0, 100).Trim() }
+        $search = "ytsearch1:$query"
+
+        $antes = [int]$d.nuevas
+        $antesSalt = [int]$d.saltadas
+        $d.drmFallbackFallo = $false
+        $d.saltandoDrm = $true
+        $d.titulo = $titulo
+        $d.yaEstaba = $false
+        $d.enCurso = $null
+        $d.calidad = $null
+
+        $built = Construir-Args @($search) $false ''
+        $rS = Join-Path $dirApp 'drm-salida.txt'
+        $rE = Join-Path $dirApp 'drm-errores.txt'
+        Remove-Item -LiteralPath $rS, $rE -Force -ErrorAction SilentlyContinue
+        try {
+            $argsStr = ($built.args -join ' ')
+            $proc = Start-Process -FilePath $ytdlp -ArgumentList $argsStr -NoNewWindow -PassThru `
+                -RedirectStandardOutput $rS -RedirectStandardError $rE
+            while ($proc -and -not $proc.HasExited) {
+                if ($d.cancelada) {
+                    try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch {}
+                    break
+                }
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                Start-Sleep -Milliseconds 40
+            }
+        } catch {
+            Registrar-Error "DRM→YouTube: $($_.Exception.Message)"
+            $d.drmFallbackFallo = $true
+        }
+
+        if ($d.cancelada) {
+            $d.saltandoDrm = $false
+            return
+        }
+
+        $huboDrmOtraVez = $false
+        foreach ($rutaLog in @($rS, $rE)) {
+            if (-not (Test-Path -LiteralPath $rutaLog)) { continue }
+            foreach ($l in @(Get-Content -LiteralPath $rutaLog -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+                if ($l -match '(?i)DRM protected|DRM-protected') { $huboDrmOtraVez = $true }
+                Procesar-Linea $l
+            }
+        }
+        $d.saltandoDrm = $false
+
+        $ok = ([int]$d.nuevas -gt $antes) -or ([int]$d.saltadas -gt $antesSalt -and -not $d.drmFallbackFallo -and -not $huboDrmOtraVez)
+        if ($ok) {
+            Estado ("DRM saltado vía YouTube:`n$titulo")
+        } else {
+            $d.nErrores++
+            $motivo = if ($huboDrmOtraVez -or $d.drmFallbackFallo) {
+                'Intenté saltar el DRM buscando en YouTube, pero no hubo éxito (no encontrada o también protegida).'
+            } else {
+                'Intenté saltar el DRM buscando en YouTube, pero no encontré la misma canción.'
+            }
+            $lineaErr = "$titulo — $motivo"
+            Resultado ([string][char]0x2717 + '  ' + $lineaErr)
+            if (-not $d.errores.Contains($lineaErr)) { [void]$d.errores.Add($lineaErr) }
+            Estado ("No se pudo saltar el DRM:`n$titulo")
+        }
+        Poner-Barra-Canciones
+        try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+    }
+}
+
 function Guardar-Informe($codigo) {
     try {
         $rS = Join-Path $dirApp 'descarga-salida.txt'
@@ -2244,10 +2505,17 @@ function Guardar-Informe($codigo) {
         $prefijo = if ($motor -eq 'spotdl' -or $motor -eq 'spotify-yt') { 'spotify→yt-dlp ' } else { 'yt-dlp ' }
         $txt.Add($prefijo + $script:ultimosArgs)
         $txt.Add('')
+        $txt.Add('===== Canciones con fallo =====')
+        if ($script:dl -and $script:dl.errores -and $script:dl.errores.Count -gt 0) {
+            foreach ($e in @($script:dl.errores)) { $txt.Add([string]$e) }
+        } else {
+            $txt.Add('(ninguna)')
+        }
+        $txt.Add('')
         $txt.Add('===== Lo que ha ido haciendo =====')
         if (Test-Path -LiteralPath $rS) { foreach ($x in (Get-Content -LiteralPath $rS -Encoding UTF8)) { $txt.Add($x) } }
         $txt.Add('')
-        $txt.Add('===== Errores y avisos =====')
+        $txt.Add('===== Errores y avisos (yt-dlp) =====')
         if (Test-Path -LiteralPath $rE) { foreach ($x in (Get-Content -LiteralPath $rE -Encoding UTF8)) { $txt.Add($x) } }
         Set-Content -LiteralPath $archInforme -Value $txt -Encoding UTF8
     } catch { Registrar-Error "Informe: $($_.Exception.Message)" }
@@ -2292,7 +2560,6 @@ function Limpiar-Restos($d) {
 
 function Terminar-Descarga($codigo) {
     $d = $script:dl
-    Guardar-Informe $codigo
     $btnAbrirUltima.Enabled = [bool]($script:ultimaCarpetaReal -and (Test-Path -LiteralPath $script:ultimaCarpetaReal))
 
     if ($d.cancelada) {
@@ -2307,11 +2574,35 @@ function Terminar-Descarga($codigo) {
         return
     }
     if ($codigo -eq -999) {
+        Guardar-Informe $codigo
         Barra-Tarea 0
         Modo $null
         Estado 'El programa: no se pudo iniciar la descarga.'
         return
     }
+
+    # Canciones con DRM: preguntar si buscar en YouTube (salvo "no volver a preguntar")
+    if ($d.drmPendientes -and $d.drmPendientes.Count -gt 0) {
+        $hacer = Preguntar-Salto-Drm $d.drmPendientes
+        if ($hacer) {
+            Intentar-Saltos-Drm $d
+            if ($d.cancelada) {
+                Estado 'Cancelando: limpiando los archivos a medias...'
+                Limpiar-Restos $d
+                Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
+                Barra-Tarea 0
+                Modo $null
+                Estado 'Descarga cancelada. Se han borrado los archivos a medias; las canciones ya terminadas se conservan.'
+                $script:colaDescargas.Clear()
+                Pintar-Cola
+                return
+            }
+        } else {
+            Marcar-Drm-Sin-Salto $d
+        }
+    }
+
+    Guardar-Informe $codigo
 
     if ($d.sync) {
         foreach ($u in $d.porUrl.Keys) {
@@ -2334,12 +2625,16 @@ function Terminar-Descarga($codigo) {
     if ($d.nErrores -gt 0) { $partes += (Plural $d.nErrores 'con problemas' 'con problemas') }
 
     if ($partes.Count -eq 0) {
-        if ($codigo -ne 0) { Estado 'Algo ha fallado. Comprueba el enlace o reinicia para actualizar.' }
+        if ($codigo -ne 0) { Estado 'Algo ha fallado. Comprueba el enlace o reinicia para actualizar yt-dlp.' }
         else { Estado 'Terminado.' }
     } elseif ($d.nuevas -eq 0 -and $d.nErrores -eq 0) {
         Estado 'No hay canciones nuevas: ya tenías todas en este formato.'
     } else {
-        Estado ('Terminado: ' + ($partes -join ', ') + '.')
+        $msgFin = 'Terminado: ' + ($partes -join ', ') + '.'
+        if ($d.nErrores -gt 0 -and ($d.nuevas -gt 0 -or $d.saltadas -gt 0)) {
+            $msgFin += ' Las que fallaron se saltaron; el resto está guardado.'
+        }
+        Estado $msgFin
     }
     if ($d.nuevas -gt 0 -and -not $d.sync) { $txtEnlace.Clear(); $txtMini.Clear() }
 
@@ -2354,7 +2649,20 @@ function Terminar-Descarga($codigo) {
         if ($borradas) { Ofrecer-Rebajar $d }
     }
     if ($d.errores.Count -gt 0) {
-        Aviso ("Algunas canciones no se han podido descargar:`n`n- " + ($d.errores -join "`n- ")) 'Warning'
+        $maxErr = @($d.errores | Select-Object -First 8)
+        $extraErr = if ($d.errores.Count -gt 8) {
+            "`n`n… y $($d.errores.Count - 8) más (Menú → Ver detalles técnicos)."
+        } else { '' }
+        Aviso ("Algunas canciones fallaron; el resto se ha seguido descargando:`n`n- " + ($maxErr -join "`n- ") + $extraErr) 'Warning'
+    }
+    if ($script:sugerirUpdateYtdlp -and -not $script:yaOfrecioUpdateSesion) {
+        $script:yaOfrecioUpdateSesion = $true
+        $script:sugerirUpdateYtdlp = $false
+        if (Pregunta "YouTube ha bloqueado o cambiado algo.`n`n¿Actualizar yt-dlp ahora? (recomendado)") {
+            Actualizar-Herramientas-Directas -Forzar
+            $verAhora = Obtener-Version-Ytdlp
+            Aviso "yt-dlp actualizado a $verAhora.`n`nVuelve a intentar la descarga."
+        }
     }
     Barra-Tarea 0
     Modo $null
