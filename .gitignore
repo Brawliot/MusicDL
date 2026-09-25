@@ -1,8 +1,14 @@
-# Clave privada RSA — NUNCA subir a GitHub
+# Clave privada RSA — NUNCA en el repo (vive en %USERPROFILE%\.secrets\MusicDL\)
 clave-privada.xml
 clave-privada.pem
 *.pem
 *.key
+
+# Empaque generado (usar Build-Zip.ps1)
+MusicDL.zip
+
+# Parches / dumps locales de edición
+_patch_dump/
 
 # Datos locales de ejecución / caché (si los hubiera en la carpeta del repo)
 .prev-version.bat

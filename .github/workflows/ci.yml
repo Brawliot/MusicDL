@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  pester:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester 5
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MaximumVersion 5.99.99 -Force -SkipPublisherCheck -Scope CurrentUser -AllowClobber
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MaximumVersion 5.99.99 -Force
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = '.\tests'
+          $cfg.Run.PassThru = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          $r = Invoke-Pester -Configuration $cfg
+          if ($r.FailedCount -gt 0) { exit 1 }
+
+      - name: Verify bat present
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath .\MusicDL.bat)) { throw 'Falta MusicDL.bat' }
+          if (-not (Test-Path -LiteralPath .\MusicDL.bat.sig)) {
+            Write-Warning 'MusicDL.bat.sig no está en el repo (normal en forks).'
+          }

@@ -1,4 +1,4 @@
-MusicDL v3.23
+MusicDL v3.36
 Made by WLY
 
 Uso
@@ -6,18 +6,21 @@ Uso
 1. Extrae este ZIP (o descarga solo MusicDL.bat)
 2. Abre MusicDL.bat
 3. Si Windows avisa: Más información → Ejecutar de todas formas
-4. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL (verás el progreso en MB)
-5. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
+4. Acepta el aviso legal la primera vez
+5. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL (verás el progreso en MB)
+6. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
 
 Solo Windows 10/11. No hace falta Python ni Git.
+Para actualizaciones automáticas, deja MusicDL.bat.sig junto al .bat.
 
-Novedades 3.23
+Novedades 3.36
 --------------
-- Primera instalación: progreso en MB y la ventana ya no se congela al descargar
+- Aviso legal en el primer uso (se guarda en ajustes)
+- Tests Pester + CI; Build-Zip.ps1 para empaquetar
 
-Novedades 3.22
+Novedades 3.35
 --------------
-- Corregido fallo al abrir en PC nuevo (tooltip del formato)
+- DRM → YouTube: usa el título real de la pista (no “Canción N de M”)
 
 Aviso legal
 -----------
@@ -25,4 +28,4 @@ Uso personal. Respeta derechos de autor y los términos de YouTube, SoundCloud y
 No redistribuyas ni vendas lo descargado sin permiso.
 Spotify no entrega audio Premium (se busca en YouTube).
 El autor no se responsabiliza del uso indebido.
-Al usar MusicDL aceptas estas condiciones.
+Al usar MusicDL aceptas estas condiciones (también se muestran la primera vez).
