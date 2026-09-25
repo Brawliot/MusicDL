@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.12)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.13)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.12'
+$versionApp = '3.13'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -1378,8 +1378,10 @@ $formMini.Controls.Add($miniBar)
 Nueva-Etiqueta $formMini 'MusicDL' 18 18 300 28 $fMiniTit $colTexto | Out-Null
 $btnExpandir = Nuevo-Boton $formMini 'GRANDE' 350 16 90 30
 $chkBajarCopiar = Nueva-Casilla $formMini 'Bajar al copiar enlace (YouTube, SoundCloud o Spotify)' 18 56 $config.bajarAlCopiar 420
-$txtMini = Nuevo-Campo $formMini 18 94 320 34 $false
-$btnMiniDl = Nuevo-BotonPrincipal $formMini 'AÑADIR' 350 94 90 34 $fBotonMed
+$txtMini = Nuevo-Campo $formMini 18 94 250 34 $false
+$btnMiniDl = Nuevo-BotonPrincipal $formMini 'AÑADIR' 278 94 80 34 $fBotonMed
+$btnMiniCancel = Nuevo-Boton $formMini 'CANCELAR' 364 94 78 34
+$btnMiniCancel.Enabled = $false
 $lstMiniCola = Nuevo-ListBoxOscuro $formMini 18 142 422 100
 $barraMini = Nueva-BarraProgreso $formMini 18 256 422 10
 $lblMiniEstado = Nueva-Etiqueta $formMini 'Listo.' 18 276 422 30 $fPequena $colTexto
@@ -1449,6 +1451,7 @@ function Modo($m) {
     $btnBorrar.Enabled = (-not $ocupado)
     $btnDescargar.Enabled = $true
     $btnCancelar.Enabled = $ocupado
+    if ($btnMiniCancel) { $btnMiniCancel.Enabled = $ocupado }
     $btnMiniDl.Enabled = $true
     if ($ocupado) {
         $btnDescargar.Text = 'AÑADIR A COLA'
@@ -1617,6 +1620,25 @@ function Poner-Barra($pct) {
     Barra-Tarea 2 $valor
 }
 
+function Marcar-Completado($ruta) {
+    $d = $script:dl
+    if (-not $d -or -not $ruta) { return }
+    $ruta = $ruta.Trim().Trim('"')
+    if ($d.yaEstaba) { $d.yaEstaba = $false; return }
+    if (-not $d.completados) { $d.completados = New-Object System.Collections.Generic.List[string] }
+    if ($d.completados -contains $ruta) { return }
+    [void]$d.completados.Add($ruta)
+    $d.enCurso = $null
+    try { $script:ultimaCarpetaReal = Split-Path -Parent $ruta } catch {}
+    $d.nuevas++
+    if ($d.listaActual) { $d.nuevasPorLista[$d.listaActual] = 1 + [int]$d.nuevasPorLista[$d.listaActual] }
+    $nombre = [IO.Path]::GetFileNameWithoutExtension($ruta)
+    $extra = if ($d.calidad) { "  [$($d.calidad)]" } else { '' }
+    $tag = if ($d.motor -eq 'spotify-yt' -or $d.motor -eq 'spotdl') { '  [Spotify→YT]' } else { '' }
+    Resultado ([string][char]0x2713 + '  ' + $nombre + $extra + $tag)
+    Estado "Guardando:`n$nombre"
+}
+
 function Procesar-Linea($l) {
     $d = $script:dl
     if ($l -match '^\[DM\](.*?)\|(.*?)\|(.*?)\|(.*)$') {
@@ -1666,21 +1688,22 @@ function Procesar-Linea($l) {
         Resultado ('–  Ya estaba en la carpeta: ' + $d.titulo)
         return
     }
-    if ($l -match '^Deleting original file') { $d.enCurso = $null; return }
-    if ($l -match '^\[ExtractAudio\] Destination: (.+)$' -or $l -match '^\[ExtractAudio\] Not converting audio (.+?); file is already' -or
-        $l -match '^\[download\] Destination: (.+)$' -or $l -match '\[Merger\] Merging formats into "(.+)"') {
-        $ruta = $matches[1].Trim('"')
-        if ($d.yaEstaba) { $d.yaEstaba = $false; return }
-        $nombre = [IO.Path]::GetFileNameWithoutExtension($ruta)
-        try { $script:ultimaCarpetaReal = Split-Path -Parent $ruta } catch {}
-        $d.enCurso = $ruta
-        $d.nuevas++
-        if ($d.listaActual) { $d.nuevasPorLista[$d.listaActual] = 1 + [int]$d.nuevasPorLista[$d.listaActual] }
-        $extra = if ($d.calidad) { "  [$($d.calidad)]" } else { '' }
-        Resultado ([string][char]0x2713 + '  ' + $nombre + $extra)
-        Estado "Guardando:`n$nombre"
+    # En curso (aún no terminado)
+    if ($l -match '^\[download\] Destination: (.+)$' -or $l -match '\[Merger\] Merging formats into "(.+)"') {
+        $d.enCurso = $matches[1].Trim().Trim('"')
+        try { $script:ultimaCarpetaReal = Split-Path -Parent $d.enCurso } catch {}
         return
     }
+    # Terminado de verdad (convertido o ya en formato final)
+    if ($l -match '^\[ExtractAudio\] Destination: (.+)$' -or $l -match '^\[ExtractAudio\] Not converting audio (.+?);') {
+        Marcar-Completado $matches[1]
+        return
+    }
+    if ($l -match '^\[download\] 100% of .+ in ') {
+        if ($d.formato -eq 'original' -and $d.enCurso) { Marcar-Completado $d.enCurso }
+        return
+    }
+    if ($l -match '^Deleting original file') { $d.enCurso = $null; return }
     if ($l -match 'has already been recorded in the archive') {
         if ($l -match '^\[download\] (\S+): has already') { [void]$d.idsSaltados.Add($matches[1]) }
         $d.saltadas++
@@ -1819,6 +1842,7 @@ function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
         sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
         inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = $null
         carpetaEscaneo = $null; motor = 'yt-dlp'
+        completados = New-Object System.Collections.Generic.List[string]
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = $indices; motor = 'yt-dlp' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2000,6 +2024,7 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
         sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
         inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = 'Spotify→YouTube'
         carpetaEscaneo = $null; motor = 'spotify-yt'
+        completados = New-Object System.Collections.Generic.List[string]
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2094,24 +2119,40 @@ function Guardar-Informe($codigo) {
 }
 
 function Limpiar-Restos($d) {
-    Start-Sleep -Milliseconds 600
+    # Borra temporales y audios a medias; conserva solo los ya marcados como terminados.
+    Start-Sleep -Milliseconds 900
+    if (-not $d) { return }
     $desde = $d.inicio.AddSeconds(-5)
-    $base = if ($script:ultimaCarpetaReal -and (Test-Path -LiteralPath $script:ultimaCarpetaReal)) { $script:ultimaCarpetaReal } else { $d.carpeta }
-    $audio = @('.m4a', '.opus', '.ogg', '.aac', '.mp3', '.flac', '.wav', '.webm', '.mp4')
-    try {
-        Get-ChildItem -LiteralPath $base -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTime -ge $desde } |
-            Where-Object {
-                $n = $_.Name.ToLower(); $e = $_.Extension.ToLower()
-                ($n -match '\.part($|-frag)') -or ($e -in @('.part', '.ytdl', '.temp')) -or ($n -match '\.temp\.') -or
-                ($e -in @('.webp', '.jpg', '.jpeg', '.png')) -or ($e -in $audio -and $d.formato -ne 'original' -and $e -ne ".$($d.formato)")
-            } | Remove-Item -Force -ErrorAction SilentlyContinue
-        if ($d.enCurso -and (Test-Path -LiteralPath $d.enCurso)) { Remove-Item -LiteralPath $d.enCurso -Force -ErrorAction SilentlyContinue }
-        Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.CreationTime -ge $desde } |
-            Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0 } |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-    } catch { Registrar-Error "Limpiar restos: $($_.Exception.Message)" }
+    $bases = New-Object System.Collections.Generic.List[string]
+    if ($d.carpeta) { [void]$bases.Add($d.carpeta) }
+    if ($script:ultimaCarpetaReal) { [void]$bases.Add($script:ultimaCarpetaReal) }
+    $ok = @{}
+    if ($d.completados) { foreach ($c in @($d.completados)) { if ($c) { $ok[[string]$c] = $true } } }
+    $tempExt = @('.part', '.ytdl', '.temp', '.webp', '.jpg', '.jpeg', '.png', '.f301', '.f251', '.f140')
+    $audio = @('.m4a', '.opus', '.ogg', '.aac', '.mp3', '.flac', '.wav', '.webm', '.mp4', '.mkv', '.m4v')
+
+    foreach ($base in @($bases | Select-Object -Unique)) {
+        if (-not $base -or -not (Test-Path -LiteralPath $base)) { continue }
+        try {
+            Get-ChildItem -LiteralPath $base -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $desde } |
+                Where-Object {
+                    $full = $_.FullName
+                    if ($ok.ContainsKey($full)) { return $false }
+                    $n = $_.Name.ToLower(); $e = $_.Extension.ToLower()
+                    if ($d.enCurso -and ($full -eq [string]$d.enCurso)) { return $true }
+                    if ($n -match '\.part($|-frag|\.)' -or $e -in $tempExt -or $n -match '\.temp\.') { return $true }
+                    if ($e -in $audio) { return $true }
+                    return $false
+                } | Remove-Item -Force -ErrorAction SilentlyContinue
+
+            Get-ChildItem -LiteralPath $base -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+                Sort-Object { $_.FullName.Length } -Descending |
+                Where-Object { $_.CreationTime -ge $desde -or $_.LastWriteTime -ge $desde } |
+                Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0 } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Registrar-Error "Limpiar restos: $($_.Exception.Message)" }
+    }
 }
 
 function Terminar-Descarga($codigo) {
@@ -2125,7 +2166,7 @@ function Terminar-Descarga($codigo) {
         Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
         Barra-Tarea 0
         Modo $null
-        Estado 'Descarga cancelada. Las canciones terminadas siguen en la carpeta.'
+        Estado 'Descarga cancelada. Se han borrado los archivos a medias; las canciones ya terminadas se conservan.'
         $script:colaDescargas.Clear()
         Pintar-Cola
         return
@@ -2593,19 +2634,24 @@ $lnkOlvidar.Add_LinkClicked({
     }
 })
 
-$btnDescargar.Add_Click({ Empezar-Descarga })
-$btnCancelar.Add_Click({
+function Cancelar-Operacion {
     if ($script:modo -eq 'descarga') {
-        $script:dl.cancelada = $true
-        Estado 'Cancelando...'
+        if ($script:dl) { $script:dl.cancelada = $true }
+        Estado 'Cancelando y borrando archivos a medias...'
         $btnCancelar.Enabled = $false
+        if ($btnMiniCancel) { $btnMiniCancel.Enabled = $false }
         Matar-Tarea
     } elseif ($script:modo -eq 'leyendo') {
         $script:lecturaCancelada = $true
         $btnCancelar.Enabled = $false
+        if ($btnMiniCancel) { $btnMiniCancel.Enabled = $false }
         Matar-Tarea
     }
-})
+}
+
+$btnDescargar.Add_Click({ Empezar-Descarga })
+$btnCancelar.Add_Click({ Cancelar-Operacion })
+$btnMiniCancel.Add_Click({ Cancelar-Operacion })
 $btnElegir.Add_Click({ Elegir-Canciones })
 
 $btnAnadir.Add_Click({ Anadir-Lista })
