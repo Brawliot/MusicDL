@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.7)
+#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.8)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.7'
+$versionApp = '3.8'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -440,7 +440,8 @@ function Tipo-Enlace($e) {
 function Es-Enlace-Valido($e) {
     if (-not $e) { return $false }
     if ($e -notmatch '^https://') { return $false }
-    if ($e -match '[\s\"''`|&;<>\*\?\{\}\[\]\\]') { return $false }
+    # Bloquear metacaracteres peligrosos; ? y & son normales en URLs (watch?v=...&list=...)
+    if ($e -match '[\s\"''`|;<>\*\{\}\[\]\\]') { return $false }
     if ($e -match '[^\x20-\x7E]') { return $false }  # solo ASCII imprimible
     $t = Tipo-Enlace $e
     return ($t -ne 'desconocido')
