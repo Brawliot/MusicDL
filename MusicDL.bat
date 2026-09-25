@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.22)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.23)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.22'
+$versionApp = '3.23'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -637,16 +637,41 @@ $timer.Add_Tick({
 # ================================================================
 #  Descarga directa de herramientas (sin depender de winget)
 # ================================================================
-function Descargar-Http($url, $destino) {
+function Descargar-Http($url, $destino, $alProgreso = $null) {
+    # Descarga por streaming para no congelar la UI y poder mostrar progreso.
     $cliente = New-Object System.Net.Http.HttpClient
-    $cliente.Timeout = [TimeSpan]::FromMinutes(15)
-    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.11')
+    $cliente.Timeout = [TimeSpan]::FromMinutes(20)
+    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.23')
     try {
-        $bytes = $cliente.GetByteArrayAsync($url).GetAwaiter().GetResult()
-        [IO.File]::WriteAllBytes($destino, $bytes)
+        $resp = $cliente.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        [void]$resp.EnsureSuccessStatusCode()
+        $total = $resp.Content.Headers.ContentLength
+        $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $fs = [IO.File]::Create($destino)
+        try {
+            $buf = New-Object byte[] 131072
+            $leido = [long]0
+            $ultimoUi = [datetime]::MinValue
+            while (($n = $stream.Read($buf, 0, $buf.Length)) -gt 0) {
+                $fs.Write($buf, 0, $n)
+                $leido += $n
+                $ahora = Get-Date
+                if (($ahora - $ultimoUi).TotalMilliseconds -ge 250) {
+                    $ultimoUi = $ahora
+                    if ($alProgreso) { try { & $alProgreso $leido $total } catch {} }
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                }
+            }
+            if ($alProgreso) { try { & $alProgreso $leido $total } catch {} }
+        } finally {
+            try { $fs.Close() } catch {}
+            try { $stream.Dispose() } catch {}
+            try { $resp.Dispose() } catch {}
+        }
         return $true
     } catch {
         Registrar-Error "Descarga $url : $($_.Exception.Message)"
+        try { Remove-Item -LiteralPath $destino -Force -ErrorAction SilentlyContinue } catch {}
         return $false
     } finally { $cliente.Dispose() }
 }
@@ -682,19 +707,52 @@ function Extraer-Zip-Selectivo($zipPath, $patronExe, $destinoExe) {
 function Instalar-Herramienta-Directa($h) {
     $destino = Join-Path $dirBin $h.destino
     $tmp = Join-Path $dirApp ('dl-' + $h.cmd + '.tmp')
-    $url = if ($h.tipo -eq 'exe-spotdl') { Url-Spotdl-Windows } else { $h.url }
-    if (-not (Descargar-Http $url $tmp)) { return $false }
+    $url = if ($h.tipo -eq 'exe-spotdl') {
+        if ($script:pop -and $script:pop.paso) {
+            $script:pop.paso.Text = "Consultando versión de $($h.nombre)..."
+            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        }
+        Url-Spotdl-Windows
+    } else { $h.url }
+    $script:dlNombrePieza = [string]$h.nombre
+    $progreso = {
+        param($leido, $total)
+        if (-not $script:pop -or -not $script:pop.paso) { return }
+        $nombrePieza = $script:dlNombrePieza
+        $mb = [Math]::Round($leido / 1MB, 1)
+        if ($total -and $total -gt 0) {
+            $pct = [int]((100.0 * $leido) / [double]$total)
+            if ($pct -gt 100) { $pct = 100 }
+            $totMb = [Math]::Round(([double]$total) / 1MB, 1)
+            $script:pop.paso.Text = "Descargando $nombrePieza... $mb / $totMb MB ($pct%)"
+        } else {
+            $script:pop.paso.Text = "Descargando $nombrePieza... $mb MB"
+        }
+    }
+    if (-not (Descargar-Http $url $tmp $progreso)) { return $false }
     try {
         if ($h.tipo -eq 'exe' -or $h.tipo -eq 'exe-spotdl') {
+            if ($script:pop -and $script:pop.paso) {
+                $script:pop.paso.Text = "Instalando $($script:dlNombrePieza)..."
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            }
             Move-Item -LiteralPath $tmp -Destination $destino -Force
             return $true
         }
         if ($h.tipo -eq 'zip-ffmpeg') {
+            if ($script:pop -and $script:pop.paso) {
+                $script:pop.paso.Text = "Extrayendo $($script:dlNombrePieza) (puede tardar)..."
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            }
             $ok = Extraer-Zip-Selectivo $tmp 'ffmpeg.exe' $destino
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
             return $ok
         }
         if ($h.tipo -eq 'zip-deno') {
+            if ($script:pop -and $script:pop.paso) {
+                $script:pop.paso.Text = "Extrayendo $($script:dlNombrePieza)..."
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            }
             $ok = Extraer-Zip-Selectivo $tmp 'deno.exe' $destino
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
             return $ok
@@ -828,13 +886,15 @@ function Instalar-Si-Falta {
     $falta = Faltan
     if ($falta.Count -eq 0) { return $true }
 
-    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet de forma directa.`nPuede tardar unos minutos. No cierres esta ventana."
+    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet de forma directa.`nFFmpeg es grande (~100 MB): verás el progreso en MB. No cierres esta ventana."
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
         $i = 0
-        foreach ($h in (Faltan)) {
+        $todas = @(Faltan)
+        $totalPasos = [Math]::Max($todas.Count, 1)
+        foreach ($h in $todas) {
             $i++
-            $script:pop.paso.Text = "Paso $i : descargando $($h.nombre)..."
+            $script:pop.paso.Text = "Paso $i de $totalPasos : preparando $($h.nombre)..."
             [System.Windows.Forms.Application]::DoEvents()
             $ok = Instalar-Herramienta-Directa $h
             if (-not $ok) {
@@ -842,7 +902,7 @@ function Instalar-Si-Falta {
                 $wg = Ruta-De 'winget'
                 if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
                 if ($wg -and $h.id) {
-                    $script:pop.paso.Text = "Paso $i : intentando con el instalador de Windows..."
+                    $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
                     [System.Windows.Forms.Application]::DoEvents()
                     try {
                         Start-Process -FilePath $wg -ArgumentList "install --id $($h.id) -e --silent --accept-source-agreements --accept-package-agreements" -Wait -NoNewWindow

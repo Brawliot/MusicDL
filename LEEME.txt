@@ -1,4 +1,4 @@
-MusicDL v3.22
+MusicDL v3.23
 Made by WLY
 
 Uso
@@ -6,22 +6,18 @@ Uso
 1. Extrae este ZIP (o descarga solo MusicDL.bat)
 2. Abre MusicDL.bat
 3. Si Windows avisa: Más información → Ejecutar de todas formas
-4. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL
+4. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL (verás el progreso en MB)
 5. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
 
 Solo Windows 10/11. No hace falta Python ni Git.
 
+Novedades 3.23
+--------------
+- Primera instalación: progreso en MB y la ventana ya no se congela al descargar
+
 Novedades 3.22
 --------------
 - Corregido fallo al abrir en PC nuevo (tooltip del formato)
-
-Novedades 3.18–3.21
--------------------
-- Reintentos ante fallos de red; la playlist continúa si una canción falla
-- Mensajes de error más claros por canción
-- Actualización fiable de yt-dlp
-- Si hay DRM: pregunta si buscar en YouTube (con «no volver a preguntar»)
-- Pestaña AJUSTES para cambiar el comportamiento DRM en cualquier momento
 
 Aviso legal
 -----------
