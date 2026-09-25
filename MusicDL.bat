@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.30)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.31)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.30'
+$versionApp = '3.31'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -2121,6 +2121,12 @@ function Marcar-Completado($ruta) {
     [void]$d.completados.Add($ruta)
     $d.enCurso = $null
     try { $script:ultimaCarpetaReal = Split-Path -Parent $ruta } catch {}
+    if (-not $d.saltandoDrm) {
+        try {
+            $parent = Split-Path -Parent $ruta
+            if ($parent) { $d.carpetaLista = $parent }
+        } catch {}
+    }
     $d.nuevas++
     if ($d.listaActual) { $d.nuevasPorLista[$d.listaActual] = 1 + [int]$d.nuevasPorLista[$d.listaActual] }
     $nombre = [IO.Path]::GetFileNameWithoutExtension($ruta)
@@ -2189,6 +2195,7 @@ function Procesar-Linea($l) {
         $nombreLista = $matches[1].Trim()
         Resultado ([string][char]0x25B8 + '  Lista: ' + $nombreLista)
         if ($d.listaActual) { $d.porUrl[$d.listaActual].nombre = $nombreLista }
+        if ($nombreLista) { $d.nombreLista = $nombreLista }
         return
     }
     if ($l -match 'Downloading (?:item|video) (\d+) of (\d+)') {
@@ -2314,9 +2321,9 @@ function Preparar-Ytdlp {
     return $ytdlp
 }
 
-function Construir-Args($enlaces, $sync, $indices) {
+function Construir-Args($enlaces, $sync, $indices, $carpetaForzada = $null, $plantillaForzada = $null) {
     $fmt = $formatos[$cmbFormato.SelectedIndex]
-    $carpeta = $txtCarpeta.Text.TrimEnd('\')
+    $carpeta = if ($carpetaForzada) { [string]$carpetaForzada.TrimEnd('\') } else { $txtCarpeta.Text.TrimEnd('\') }
     $a = New-Object System.Collections.Generic.List[string]
     $a.AddRange([string[]]@('--newline', '--progress', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
     $a.Add('--concurrent-fragments'); $a.Add('4')
@@ -2333,7 +2340,7 @@ function Construir-Args($enlaces, $sync, $indices) {
     $deno = Ruta-De 'deno'
     if ($deno) { $a.Add('--js-runtimes'); $a.Add((Q ("deno:$deno"))) }
 
-    $hayYt = @($enlaces | Where-Object { $_ -match 'youtube\.com|youtu\.be' }).Count -gt 0
+    $hayYt = @($enlaces | Where-Object { $_ -match 'youtube\.com|youtu\.be|ytsearch' }).Count -gt 0
     if ($hayYt) {
         $a.Add('--sleep-interval'); $a.Add('1')
         $a.Add('--max-sleep-interval'); $a.Add('3')
@@ -2351,7 +2358,7 @@ function Construir-Args($enlaces, $sync, $indices) {
     $a.Add('--progress-template'); $a.Add((Q 'download:[DM]%(progress._percent_str)s|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s'))
     $a.Add('--progress-template'); $a.Add((Q 'postprocess:[DM]100%|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s'))
 
-    if ($cmbOrganizar.SelectedIndex -eq 2) {
+    if (-not $plantillaForzada -and $cmbOrganizar.SelectedIndex -eq 2) {
         $a.Add('--parse-metadata'); $a.Add((Q 'title:(?P<artist>.+?) - (?P<title>.+)'))
         $a.Add('--replace-in-metadata'); $a.Add('uploader'); $a.Add((Q '(?i)\s*(- topic|vevo)$')); $a.Add('""')
     }
@@ -2373,10 +2380,14 @@ function Construir-Args($enlaces, $sync, $indices) {
         if ($fmt -ne 'original') { $a.Add('--embed-metadata') }
     }
 
-    switch ($cmbOrganizar.SelectedIndex) {
-        0 { $plantilla = '%(title).120B.%(ext)s' }
-        1 { $plantilla = '%(playlist_title).80B/%(playlist_index&{} - |)s%(title).100B.%(ext)s' }
-        2 { $plantilla = '%(artist,uploader).60B/%(title).100B.%(ext)s' }
+    if ($plantillaForzada) {
+        $plantilla = $plantillaForzada
+    } else {
+        switch ($cmbOrganizar.SelectedIndex) {
+            0 { $plantilla = '%(title).120B.%(ext)s' }
+            1 { $plantilla = '%(playlist_title).80B/%(playlist_index&{} - |)s%(title).100B.%(ext)s' }
+            2 { $plantilla = '%(artist,uploader).60B/%(title).100B.%(ext)s' }
+        }
     }
     $a.Add('-o'); $a.Add((Q $plantilla))
 
@@ -2387,6 +2398,46 @@ function Construir-Args($enlaces, $sync, $indices) {
     $finales = @($enlaces | ForEach-Object { Arreglar-Enlace $_ })
     foreach ($e in $finales) { $a.Add((Q $e)) }
     return @{ args = $a; finales = $finales; fmt = $fmt; carpeta = $carpeta }
+}
+
+function Nombre-Carpeta-Seguro($nombre) {
+    if (-not $nombre) { return '' }
+    $n = [string]$nombre
+    foreach ($ch in [IO.Path]::GetInvalidFileNameChars()) { $n = $n.Replace([string]$ch, '') }
+    $n = ($n -replace '\s+', ' ').Trim().TrimEnd('.')
+    if ($n.Length -gt 80) { $n = $n.Substring(0, 80).Trim().TrimEnd('.') }
+    return $n
+}
+
+function Carpeta-Padre-DrmYt($d) {
+    # Carpeta de la lista (o raíz) dentro de la cual irá la subcarpeta YouTube.
+    $raiz = if ($d -and $d.carpeta) { [string]$d.carpeta.TrimEnd('\') } else { $txtCarpeta.Text.TrimEnd('\') }
+
+    if ($d -and $d.carpetaLista) {
+        $c = [string]$d.carpetaLista.TrimEnd('\')
+        if ($c -match '[\\/]YouTube$') { $c = Split-Path -Parent $c }
+        if ($c -and $c.StartsWith($raiz, [StringComparison]::OrdinalIgnoreCase)) { return $c }
+    }
+
+    if ($script:ultimaCarpetaReal) {
+        $c = [string]$script:ultimaCarpetaReal.TrimEnd('\')
+        if ($c -match '[\\/]YouTube$') { $c = Split-Path -Parent $c }
+        if ($c -and $c.StartsWith($raiz, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $c)) {
+            return $c
+        }
+    }
+
+    if ($d -and $d.nombreLista) {
+        $safe = Nombre-Carpeta-Seguro $d.nombreLista
+        if ($safe) { return (Join-Path $raiz $safe) }
+    }
+
+    if ($d -and $d.listaActual -and $d.porUrl -and $d.porUrl.ContainsKey($d.listaActual)) {
+        $nom = Nombre-Carpeta-Seguro $d.porUrl[$d.listaActual].nombre
+        if ($nom) { return (Join-Path $raiz $nom) }
+    }
+
+    return $raiz
 }
 
 function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
@@ -2414,6 +2465,7 @@ function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
         indiceUrl = 0
         drmPendientes = New-Object System.Collections.ArrayList
         drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
+        nombreLista = $null; carpetaLista = $null
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = $indices; motor = 'yt-dlp' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2637,6 +2689,7 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
         indiceUrl = 0
         drmPendientes = New-Object System.Collections.ArrayList
         drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
+        nombreLista = $null; carpetaLista = $null
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2836,7 +2889,10 @@ function Intentar-Saltos-Drm($d) {
         $d.enCurso = $null
         $d.calidad = $null
 
-        $built = Construir-Args @($search) $false ''
+        $built = Construir-Args @($search) $false '' (Carpeta-Padre-DrmYt $d) 'YouTube/%(title).100B.%(ext)s'
+        try {
+            New-Item -ItemType Directory -Force -Path (Join-Path $built.carpeta 'YouTube') -ErrorAction SilentlyContinue | Out-Null
+        } catch {}
         $rS = Join-Path $dirApp 'drm-salida.txt'
         $rE = Join-Path $dirApp 'drm-errores.txt'
         Remove-Item -LiteralPath $rS, $rE -Force -ErrorAction SilentlyContinue
