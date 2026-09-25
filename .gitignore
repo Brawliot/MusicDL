@@ -1,0 +1,20 @@
+# Clave privada RSA — NUNCA subir a GitHub
+clave-privada.xml
+clave-privada.pem
+*.pem
+*.key
+
+# Datos locales de ejecución / caché (si los hubiera en la carpeta del repo)
+.prev-version.bat
+*.tmp
+dl-*.tmp
+__pycache__/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores / entorno
+.vscode/
+.idea/
+*.swp
+*~
