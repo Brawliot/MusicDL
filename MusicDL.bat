@@ -14,6 +14,7 @@ REM Si una actualizacion anterior no llego a arrancar, restaurar la version prev
 if exist "%DM_DIR%\esperando-arranque.flag" (
   if exist "%DM_DIR%\prev-version.bat" (
     copy /y "%DM_DIR%\prev-version.bat" "%DM_BAT%" >nul
+    if exist "%DM_DIR%\prev-version.bat.sig" copy /y "%DM_DIR%\prev-version.bat.sig" "%DM_BAT%.sig" >nul
     echo Restaurado automaticamente tras un fallo de actualizacion. > "%DM_DIR%\errores.log"
   )
   del /f /q "%DM_DIR%\esperando-arranque.flag" >nul 2>&1
@@ -23,20 +24,20 @@ if exist "%DM_DIR%\update-pending.flag" (
   echo. > "%DM_DIR%\esperando-arranque.flag"
 )
 
-REM Sin -ExecutionPolicy Bypass ni iex: ScriptBlock.Create + verifica .sig si existe
-start "" powershell -NoProfile -STA -WindowStyle Hidden -Command "& { $ErrorActionPreference='Stop'; $bat=$env:DM_BAT; $raw=[IO.File]::ReadAllText($bat,[Text.Encoding]::UTF8); $sig=$bat+'.sig'; if (Test-Path -LiteralPath $sig) { $pub=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:DM_PUB_B64)); $rsa=[Security.Cryptography.RSA]::Create(); $rsa.FromXmlString($pub); $bytes=[IO.File]::ReadAllBytes($bat); $firma=[Convert]::FromBase64String(((Get-Content -LiteralPath $sig -Raw) -replace '\s','')); if (-not $rsa.VerifyData($bytes,$firma,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)) { Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show('La firma de MusicDL no es valida. No se inicia.','MusicDL',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error); exit 1 } }; $sb=[scriptblock]::Create($raw); & $sb }"
+REM Sin Bypass/iex: firma RSA sobre $bytes y ScriptBlock desde esos mismos bytes (sin releer disco)
+start "" powershell -NoProfile -STA -WindowStyle Hidden -Command "& { $ErrorActionPreference='Stop'; $bat=$env:DM_BAT; $sig=$bat+'.sig'; Add-Type -AssemblyName System.Windows.Forms; if (-not (Test-Path -LiteralPath $sig)) { [void][System.Windows.Forms.MessageBox]::Show('Falta MusicDL.bat.sig junto al programa. Sin firma RSA no se inicia.','MusicDL',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error); exit 1 }; $pub=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:DM_PUB_B64)); $tmp=[Security.Cryptography.RSA]::Create(); $tmp.FromXmlString($pub); $rp=$tmp.ExportParameters($false); $tmp.Dispose(); $rsa=New-Object Security.Cryptography.RSACng; $rsa.ImportParameters($rp); $bytes=[IO.File]::ReadAllBytes($bat); $firma=[Convert]::FromBase64String(((Get-Content -LiteralPath $sig -Raw) -replace '\s','')); if (-not $rsa.VerifyData($bytes,$firma,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pss)) { [void][System.Windows.Forms.MessageBox]::Show('La firma de MusicDL no es valida. No se inicia.','MusicDL',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error); exit 1 }; $raw=[Text.Encoding]::UTF8.GetString($bytes); $sb=[scriptblock]::Create($raw); & $sb }"
 exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.36)
-#  Usa yt-dlp, FFmpeg, Deno y spotDL (URL fija + SHA256; winget como respaldo).
-#  Actualizaciones firmadas con clave RSA del autor.
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.40)
+#  Usa yt-dlp, FFmpeg, Deno y spotDL (URL fija + SHA256; sin winget).
+#  Arranque y actualizaciones exigen firma RSA del autor.
 #  Arquitectura: un solo archivo a proposito (distribucion simple); secciones
 #  marcadas con #region / #endregion. Sin ofuscacion.
 # ================================================================
 
-$versionApp = '3.36'
+$versionApp = '3.40'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -47,9 +48,8 @@ $urlFirma = ''
 # Clave pública RSA (XML). Solo el autor tiene la privada (clave-privada.xml).
 $clavePublicaXml = '<RSAKeyValue><Modulus>po2BhuG7eWT/bc65ZUh8QesDy5VFoG1+xU77YmW9OLWU+w0kZx0N7MfzAD4pSZleTbv3gxm9UwTFFSuApEDlsDYAYemd5WgMU70TgoXV7cEbX/DuvBwRo34ezCCjDafcRkpL5T3cXj1vNcZPIiCOpw1UzjPzUlFT8+fIjsBocmVSat1aKlfZWUXpQtEsF0OgMo1mL+lPMV15RyKUOGZB/QOg0JnUvTux2ywGUQtOo7uvYQN1Cl08X7iKpAObJZXny2Nu2BbDIAYj+IURvvZF3EVArkzhWtNjUSgf2/5e1GD/jTWJeVYbkRnG19fsc2TGonwxZdEGM8aCD0y6ULoVSQ==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
-# Preferencia global Continue: timers/UI WinForms no deben tumbar el proceso
-# por errores no fatales. Las rutas críticas (SHA256, firma, I/O de instalación)
-# usan try/catch + Catch-Log y, donde aplica, -ErrorAction Stop explícito.
+# UI: Continue para no tumbar timers/WinForms por errores no fatales.
+# Rutas criticas (descarga, install, firma, update) usan Con-ErrorActionStop.
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -155,7 +155,7 @@ public static class DMWin {
             SetWindowTheme(h, "DarkMode_Explorer", null);
             int on = 1;
             DwmSetWindowAttribute(h, 20, ref on, 4); // DWMWA_USE_IMMERSIVE_DARK_MODE
-        } catch { Catch-Log 'bloque' $_ }
+        } catch { }
     }
 
     static DMTaskbarList3 tb;
@@ -164,7 +164,7 @@ public static class DMWin {
             if (tb == null) { tb = (DMTaskbarList3)new DMTaskbarListClass(); tb.HrInit(); }
             tb.SetProgressState(h, estado);
             if (estado == 2 || estado == 4) tb.SetProgressValue(h, valor, total);
-        } catch { Catch-Log 'bloque' $_ }
+        } catch { }
     }
 
     public static void SetShortcutAppId(string path, string appId) {
@@ -216,7 +216,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 # Formatos: original = sin convertir (mejor calidad real de la fuente)
 $formatos = @('original', 'mp3', 'm4a', 'opus', 'flac', 'wav')
-$formatosEtiqueta = @(
+$script:formatosEtiquetaEs = @(
     'Original (sin convertir)',
     'MP3 (recomendado)',
     'M4A (iPhone)',
@@ -224,6 +224,15 @@ $formatosEtiqueta = @(
     'FLAC (sin pérdida)',
     'WAV (sin comprimir)'
 )
+$script:formatosEtiquetaEn = @(
+    'Original (no convert)',
+    'MP3 (recommended)',
+    'M4A (iPhone)',
+    'OPUS (small size)',
+    'FLAC (lossless)',
+    'WAV (uncompressed)'
+)
+$formatosEtiqueta = $script:formatosEtiquetaEs
 
 
 function Raices-Destino-Permitidas {
@@ -266,8 +275,52 @@ function Normalizar-Carpeta-Destino($ruta) {
     return (Carpeta-Destino-Por-Defecto)
 }
 
+function Texto-Destino-Amigable([string]$ruta) {
+    $ruta = Normalizar-Carpeta-Destino $ruta
+    $def = Normalizar-Carpeta-Destino (Carpeta-Destino-Por-Defecto)
+    # "Música" con código Unicode (evita líos de encoding del .bat)
+    $musica = 'M' + [string][char]0x00FA + 'sica'
+    if ([string]::Equals($ruta, $def, [StringComparison]::OrdinalIgnoreCase)) {
+        return ($musica + ' descargada (en tu carpeta ' + $musica + ')')
+    }
+    $nombre = [IO.Path]::GetFileName($ruta)
+    if (-not $nombre) { $nombre = $ruta }
+    $padres = @(
+        @{ r = [Environment]::GetFolderPath('MyMusic'); n = $musica },
+        @{ r = [Environment]::GetFolderPath('MyDocuments'); n = 'Documentos' },
+        @{ r = [Environment]::GetFolderPath('Desktop'); n = 'Escritorio' },
+        @{ r = (Join-Path $env:USERPROFILE 'Downloads'); n = 'Descargas' },
+        @{ r = $env:USERPROFILE; n = 'tu usuario' }
+    )
+    foreach ($p in $padres) {
+        if (-not $p.r) { continue }
+        try {
+            $root = [IO.Path]::GetFullPath(($p.r.TrimEnd('\') + '\'))
+            $full = [IO.Path]::GetFullPath(($ruta.TrimEnd('\') + '\'))
+            if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                if ($full.Length -eq $root.Length) { return ("Tu carpeta " + $p.n) }
+                return ($nombre + ' (en ' + $p.n + ')')
+            }
+        } catch { Catch-Log 'Texto-Destino-Amigable' $_ }
+    }
+    return $nombre
+}
+
+function Carpeta-UI-Actual {
+    if ($script:carpetaReal) { return (Normalizar-Carpeta-Destino $script:carpetaReal) }
+    return (Carpeta-Destino-Por-Defecto)
+}
+
+function Fijar-Carpeta-UI([string]$ruta) {
+    $script:carpetaReal = Normalizar-Carpeta-Destino $ruta
+    if ($txtCarpeta -and -not $txtCarpeta.IsDisposed) {
+        $txtCarpeta.Text = Texto-Destino-Amigable $script:carpetaReal
+        if ($tips) { $tips.SetToolTip($txtCarpeta, $script:carpetaReal) }
+    }
+}
+
 $config = [ordered]@{
-    formato            = 0
+    formato            = 1
     organizar          = 1
     carpeta            = (Carpeta-Destino-Por-Defecto)
     portada            = $false
@@ -281,7 +334,26 @@ $config = [ordered]@{
     bajarAlCopiar      = $false
     ventanaMini        = $false
     avisoLegalAceptado = $false
+    avisoLegalRevision = 0
+    modoSimple         = $true
+    onboardingHecho    = $false
+    avisoSpotifyHecho  = $false
+    idioma             = 'es'
 }
+# Sube este número si cambia el texto legal (obliga a reaceptar).
+$script:avisoLegalRevisionActual = 2
+
+function Idioma-Actual {
+    try {
+        if ([string]$config.idioma -eq 'en') { return 'en' }
+    } catch {}
+    return 'es'
+}
+function T([string]$es, [string]$en) {
+    if ((Idioma-Actual) -eq 'en' -and $en) { return $en }
+    return $es
+}
+
 function Cargar-Config {
     $ruta = $null
     if (Test-Path -LiteralPath $archConfig) { $ruta = $archConfig }
@@ -306,6 +378,16 @@ function Cargar-Config {
             $config.limpiar = $false
             $config.saltar = $false
         }
+        # v3.37: modo simple / onboarding (usuarios antiguos no ven el tutorial otra vez)
+        if (-not ($leido.PSObject.Properties.Name -contains 'modoSimple')) {
+            $config.modoSimple = $true
+        }
+        if (-not ($leido.PSObject.Properties.Name -contains 'onboardingHecho')) {
+            $config.onboardingHecho = [bool]$config.avisoLegalAceptado
+        }
+        if (-not ($leido.PSObject.Properties.Name -contains 'avisoSpotifyHecho')) {
+            $config.avisoSpotifyHecho = $false
+        }
         $config.carpeta = Normalizar-Carpeta-Destino $config.carpeta
     } catch {
         Registrar-Error "No se pudo leer config: $($_.Exception.Message)"
@@ -327,7 +409,9 @@ function Catch-Log([string]$contexto, $err) {
     if (-not $msg) { return }
     if ($msg -match '(?i)cancel|abort|disposed|se ha eliminado el identificador|thread was being aborted') { return }
     Registrar-Error "$contexto : $msg"
-  } catch { Catch-Log 'Catch-Log' $_ }
+  } catch {
+    # No reentrar en Catch-Log (evitar recursión si falla el registro)
+  }
 }
 
 
@@ -348,6 +432,11 @@ function Guardar-Config-Disco {
 }
 
 Cargar-Config
+if ((Idioma-Actual) -eq 'en') {
+    $formatosEtiqueta = $script:formatosEtiquetaEn
+} else {
+    $formatosEtiqueta = $script:formatosEtiquetaEs
+}
 
 # Migrar historial antiguo (sin formato) → mp3
 $archHistViejo = Join-Path $dirApp 'ya-descargadas.txt'
@@ -363,7 +452,8 @@ foreach ($x in @($config.listas)) {
     }
 }
 
-# Herramientas: URL fija + SHA256 (no "latest"). Al subir versiones nuevas, actualiza url+sha256 y firma el .bat.
+# Herramientas: URL fija + SHA256 del artefacto (y sha256exe si viene en ZIP).
+# Al subir versiones nuevas, actualiza url+sha256[+sha256exe] y firma el .bat.
 $herramientas = @(
     @{
         cmd = 'yt-dlp'; id = 'yt-dlp.yt-dlp'; nombre = 'el descargador'
@@ -375,12 +465,14 @@ $herramientas = @(
         cmd = 'ffmpeg'; id = 'Gyan.FFmpeg'; nombre = 'el conversor de audio'
         url = 'https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2026-09-24-18-44/ffmpeg-N-126838-g9058b3622e-win64-gpl.zip'
         sha256 = 'CB5020C310EB2439322CB65CF32AF89FC714A78061B464BFDB7D1EEAA1B232C7'
+        sha256exe = '2A1FD2A0A9FE7F3343DDE8B707354B4B36837A55735EE739D9F872A3CFE1F6F3'
         tipo = 'zip-ffmpeg'; destino = 'ffmpeg.exe'
     },
     @{
         cmd = 'deno'; id = 'DenoLand.Deno'; nombre = 'el complemento para YouTube'
         url = 'https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-pc-windows-msvc.zip'
         sha256 = 'A0C3101B4158D1DFB7D6A78A7BF0F3DE80C96BB423C152BEEC8BEB22786F2238'
+        sha256exe = 'E020F3E232BD16E33768DEE528E5983349C962952051CED0A5D58AD42F5D9B33'
         tipo = 'zip-deno'; destino = 'deno.exe'
     },
     @{
@@ -408,6 +500,26 @@ $colBlanco    = [System.Drawing.Color]::White
 $colExito     = [System.Drawing.ColorTranslator]::FromHtml('#3DDC97')
 $colAviso     = [System.Drawing.ColorTranslator]::FromHtml('#FFB020')
 
+# Alto contraste de Windows: usar colores del sistema (M5)
+$script:altoContraste = $false
+try { $script:altoContraste = [System.Windows.Forms.SystemInformation]::HighContrast } catch { $script:altoContraste = $false }
+if ($script:altoContraste) {
+    $colFondo     = [System.Drawing.SystemColors]::Control
+    $colPanel     = [System.Drawing.SystemColors]::Window
+    $colCampo     = [System.Drawing.SystemColors]::Window
+    $colTexto     = [System.Drawing.SystemColors]::WindowText
+    $colSuave     = [System.Drawing.SystemColors]::GrayText
+    $colTenue     = [System.Drawing.SystemColors]::GrayText
+    $colBorde     = [System.Drawing.SystemColors]::WindowFrame
+    $colHover     = [System.Drawing.SystemColors]::Highlight
+    $colAcento    = [System.Drawing.SystemColors]::Highlight
+    $colAcentoOsc = [System.Drawing.SystemColors]::HotTrack
+    $colCancelar  = [System.Drawing.SystemColors]::ControlDark
+    $colBlanco    = [System.Drawing.SystemColors]::HighlightText
+    $colExito     = [System.Drawing.SystemColors]::Highlight
+    $colAviso     = [System.Drawing.SystemColors]::HotTrack
+}
+
 $fNormal   = New-Object System.Drawing.Font('Segoe UI', 9.5)
 $fPequena  = New-Object System.Drawing.Font('Segoe UI', 8.5)
 $fTitulo   = New-Object System.Drawing.Font('Segoe UI', 18, [System.Drawing.FontStyle]::Bold)
@@ -425,6 +537,13 @@ $fMono     = New-Object System.Drawing.Font('Consolas', 8.5)
 # ================================================================
 function Q($s) { '"' + ($s -replace '"', '\"') + '"' }
 
+
+function Con-ErrorActionStop([scriptblock]$accion) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Stop'
+    try { return & $accion }
+    finally { $ErrorActionPreference = $prev }
+}
 function Formato-Args-Informe($argsLista) {
     if ($null -eq $argsLista) { return '' }
     $parts = foreach ($a in @($argsLista)) {
@@ -436,20 +555,76 @@ function Formato-Args-Informe($argsLista) {
 
 
 function Refrescar-Path {
+    # Preferir siempre nuestras herramientas pinneadas en %APPDATA%\MusicDL\bin
     $m = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $u = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $links = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
-    $env:Path = "$dirBin;$links;$m;$u"
+    $env:Path = "$dirBin;$m;$u"
 }
 
 function Ruta-De($cmd) {
+    # Solo binarios instalados por MusicDL (URL+SHA256). No se usa PATH del sistema.
     $local = Join-Path $dirBin "$cmd.exe"
-    if (Test-Path -LiteralPath $local) { return $local }
-    $c = Get-Command $cmd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($c) { return $c.Source } else { return $null }
+    if (-not (Test-Path -LiteralPath $local)) { return $null }
+    $h = @($script:herramientas | Where-Object { $_.cmd -eq $cmd } | Select-Object -First 1)[0]
+    if ($h) {
+        $esperado = $null
+        if ($h.tipo -eq 'exe' -and $h.sha256) { $esperado = [string]$h.sha256 }
+        elseif ($h.sha256exe) { $esperado = [string]$h.sha256exe }
+        if ($esperado -and -not (Verificar-Sha256 $local $esperado)) {
+            Registrar-Error "Ruta-De: SHA256 inválido para $cmd en bin\; se ignora el archivo"
+            return $null
+        }
+    }
+    return $local
 }
 
 function Faltan { return @($script:herramientas | Where-Object { -not (Ruta-De $_.cmd) }) }
+
+$script:ultimoBombeoUi = [datetime]::MinValue
+$script:enBombeoUi = $false
+function Bombeo-Ui([int]$minMs = 120) {
+    # DoEvents con límite de frecuencia + anti-reentrancia (M6)
+    if ($script:enBombeoUi) { return }
+    $ahora = Get-Date
+    if (($ahora - $script:ultimoBombeoUi).TotalMilliseconds -lt [double]$minMs) { return }
+    $script:ultimoBombeoUi = $ahora
+    $script:enBombeoUi = $true
+    try {
+        [System.Windows.Forms.Application]::DoEvents()
+    } catch {
+    } finally {
+        $script:enBombeoUi = $false
+    }
+}
+
+function Esperar-Proceso-Con-Timeout {
+    param(
+        $proc,
+        [int]$timeoutSeg = 300,
+        [scriptblock]$siCancelar = $null,
+        [string]$contexto = 'Proceso'
+    )
+    if (-not $proc) { return 'ok' }
+    $inicio = Get-Date
+    while (-not $proc.HasExited) {
+        $cancel = $false
+        if ($siCancelar) {
+            try { $cancel = [bool](& $siCancelar) } catch { $cancel = $false }
+        }
+        if ($cancel) {
+            try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch { Catch-Log $contexto $_ }
+            return 'cancelado'
+        }
+        if (((Get-Date) - $inicio).TotalSeconds -ge [double]$timeoutSeg) {
+            try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch { Catch-Log $contexto $_ }
+            Registrar-Error "${contexto}: timeout tras ${timeoutSeg}s"
+            return 'timeout'
+        }
+        Bombeo-Ui 80
+        Start-Sleep -Milliseconds 40
+    }
+    return 'ok'
+}
 
 function Verificar-Sha256($ruta, $esperado) {
     if (-not $esperado) { return $false }
@@ -579,10 +754,18 @@ function Parece-Lista($e) {
 
 function Verificar-Firma($bytes, $firmaB64) {
     try {
-        $rsa = [System.Security.Cryptography.RSA]::Create()
-        $rsa.FromXmlString($clavePublicaXml)
+        $tmp = [System.Security.Cryptography.RSA]::Create()
+        $tmp.FromXmlString($clavePublicaXml)
+        $rp = $tmp.ExportParameters($false)
+        $tmp.Dispose()
+        $rsa = New-Object System.Security.Cryptography.RSACng
+        $rsa.ImportParameters($rp)
         $firma = [Convert]::FromBase64String(($firmaB64 -replace '\s', ''))
-        return $rsa.VerifyData($bytes, $firma, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $sha = [System.Security.Cryptography.HashAlgorithmName]::SHA256
+        # PSS (releases nuevas) y PKCS1 (transicion: lo que aun hay en GitHub raw)
+        if ($rsa.VerifyData($bytes, $firma, $sha, [System.Security.Cryptography.RSASignaturePadding]::Pss)) { return $true }
+        if ($rsa.VerifyData($bytes, $firma, $sha, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)) { return $true }
+        return $false
     } catch {
         Registrar-Error "Verificar firma: $($_.Exception.Message)"
         return $false
@@ -723,10 +906,11 @@ $timer.Add_Tick({
 #  Descarga directa de herramientas (sin depender de winget)
 # ================================================================
 function Descargar-Http($url, $destino, $alProgreso = $null) {
+    return Con-ErrorActionStop {
     # Streaming + espera con DoEvents para no congelar el popup (sobre todo al conectar).
     $cliente = New-Object System.Net.Http.HttpClient
     $cliente.Timeout = [TimeSpan]::FromMinutes(5)
-    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.36')
+    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.40')
     $cts = New-Object System.Threading.CancellationTokenSource
     $script:downloadCts = $cts
     try {
@@ -734,14 +918,14 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
             $script:pop.paso.Text = 'Conectando con GitHub...'
             if ($script:pop.pct) { $script:pop.pct.Text = '' }
             Poner-Popup-Barra $null
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            Bombeo-Ui
         }
 
         $task = $cliente.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token)
         while (-not $task.IsCompleted) {
             if ($script:popupCancelado) { try { $cts.Cancel() } catch { Catch-Log 'Descargar-Http' $_ }; return $false }
             try { [void]$task.Wait(200) } catch { break }
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            Bombeo-Ui
         }
         if ($script:popupCancelado) { return $false }
         if ($task.IsCanceled) { return $false }
@@ -761,7 +945,7 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
                 while (-not $readTask.IsCompleted) {
                     if ($script:popupCancelado) { try { $cts.Cancel() } catch { Catch-Log 'Descargar-Http' $_ }; return $false }
                     try { [void]$readTask.Wait(200) } catch { break }
-                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                    Bombeo-Ui
                 }
                 if ($readTask.IsCanceled) { return $false }
                 if ($readTask.IsFaulted) { throw $readTask.Exception.GetBaseException() }
@@ -773,7 +957,7 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
                 if (($ahora - $ultimoUi).TotalMilliseconds -ge 250) {
                     $ultimoUi = $ahora
                     if ($alProgreso) { try { & $alProgreso $leido $total } catch { Catch-Log 'Descargar-Http' $_ } }
-                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                    Bombeo-Ui
                 }
             }
             if ($alProgreso) { try { & $alProgreso $leido $total } catch { Catch-Log 'Descargar-Http' $_ } }
@@ -798,25 +982,68 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
         try { $cts.Dispose() } catch {}
         $cliente.Dispose()
     }
+
+    }
 }
 
 function Extraer-Zip-Selectivo($zipPath, $patronExe, $destinoExe) {
+    return Con-ErrorActionStop {
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    function Es-Entrada-Zip-Segura([string]$nombreEntrada, [string]$dirDestino) {
+        if ([string]::IsNullOrWhiteSpace($nombreEntrada)) { return $false }
+        $n = $nombreEntrada -replace '\\', '/'
+        if ($n.Contains('..')) { return $false }
+        if ($n -match '^[a-zA-Z]:' -or $n.StartsWith('/')) { return $false }
+        $rel = ($n -replace '/', [IO.Path]::DirectorySeparatorChar)
+        $full = [IO.Path]::GetFullPath((Join-Path $dirDestino $rel))
+        $root = [IO.Path]::GetFullPath(($dirDestino.TrimEnd('\') + '\'))
+        return $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+    }
+    function Extraer-Entrada-Zip($entry, $rutaSalida) {
+        $dir = Split-Path -Parent $rutaSalida
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        }
+        $src = $entry.Open()
+        try {
+            $dst = [IO.File]::Create($rutaSalida)
+            try { $src.CopyTo($dst) } finally { $dst.Dispose() }
+        } finally { $src.Dispose() }
+    }
     $tmp = Join-Path $dirApp ('tmp-extract-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $fs = $null
+    $zip = $null
     try {
-        [IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tmp)
-        $encontrado = Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter $patronExe | Select-Object -First 1
-        if (-not $encontrado) { return $false }
-        Copy-Item -LiteralPath $encontrado.FullName -Destination $destinoExe -Force
-        # Copiar DLLs hermanas de ffmpeg si las hay
+        $fs = [IO.File]::OpenRead($zipPath)
+        $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Read)
+        $entry = $zip.Entries | Where-Object {
+            $_.Name -and (
+                $_.Name -eq $patronExe -or
+                $_.FullName.EndsWith('/' + $patronExe) -or
+                $_.FullName.EndsWith('\' + $patronExe)
+            )
+        } | Select-Object -First 1
+        if (-not $entry) { return $false }
+        if (-not (Es-Entrada-Zip-Segura $entry.FullName $tmp)) {
+            Registrar-Error "ZIP entrada insegura: $($entry.FullName)"
+            return $false
+        }
+        $outExe = Join-Path $tmp $patronExe
+        Extraer-Entrada-Zip $entry $outExe
+        Copy-Item -LiteralPath $outExe -Destination $destinoExe -Force
         if ($patronExe -eq 'ffmpeg.exe') {
-            $dirOrigen = $encontrado.DirectoryName
+            $dirEntry = ($entry.FullName -replace '[\\/][^\\/]+$', '')
             foreach ($extra in @('ffprobe.exe', 'ffplay.exe')) {
-                $e = Join-Path $dirOrigen $extra
-                if (Test-Path -LiteralPath $e) {
-                    Copy-Item -LiteralPath $e -Destination (Join-Path $dirBin $extra) -Force
-                }
+                $sib = $zip.Entries | Where-Object {
+                    $_.Name -eq $extra -and (($_.FullName -replace '[\\/][^\\/]+$', '') -eq $dirEntry)
+                } | Select-Object -First 1
+                if (-not $sib) { continue }
+                if (-not (Es-Entrada-Zip-Segura $sib.FullName $tmp)) { continue }
+                $sibOut = Join-Path $tmp $extra
+                Extraer-Entrada-Zip $sib $sibOut
+                Copy-Item -LiteralPath $sibOut -Destination (Join-Path $dirBin $extra) -Force
             }
         }
         return $true
@@ -824,11 +1051,16 @@ function Extraer-Zip-Selectivo($zipPath, $patronExe, $destinoExe) {
         Registrar-Error "Extraer zip: $($_.Exception.Message)"
         return $false
     } finally {
+        if ($zip) { try { $zip.Dispose() } catch {} }
+        if ($fs) { try { $fs.Dispose() } catch {} }
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     }
 }
 
 function Instalar-Herramienta-Directa($h) {
+    return Con-ErrorActionStop {
     $destino = Join-Path $dirBin $h.destino
     $tmp = Join-Path $dirApp ('dl-' + $h.cmd + '.tmp')
     $url = [string]$h.url
@@ -862,7 +1094,7 @@ function Instalar-Herramienta-Directa($h) {
     try {
         if ($script:pop -and $script:pop.paso) {
             $script:pop.paso.Text = "Comprobando integridad de $($script:dlNombrePieza)..."
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            Bombeo-Ui
         }
         if (-not (Verificar-Sha256 $tmp $h.sha256)) {
             $script:falloIntegridad = $true
@@ -875,7 +1107,7 @@ function Instalar-Herramienta-Directa($h) {
         if ($h.tipo -eq 'exe') {
             if ($script:pop -and $script:pop.paso) {
                 $script:pop.paso.Text = "Instalando $($script:dlNombrePieza)..."
-                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                Bombeo-Ui
             }
             Move-Item -LiteralPath $tmp -Destination $destino -Force
             return $true
@@ -885,19 +1117,31 @@ function Instalar-Herramienta-Directa($h) {
                 $script:pop.paso.Text = "Extrayendo $($script:dlNombrePieza) (puede tardar)..."
                 if ($script:pop.pct) { $script:pop.pct.Text = '' }
                 Poner-Popup-Barra $null
-                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                Bombeo-Ui
             }
             $ok = Extraer-Zip-Selectivo $tmp 'ffmpeg.exe' $destino
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            if ($ok -and $h.sha256exe -and -not (Verificar-Sha256 $destino $h.sha256exe)) {
+                $script:falloIntegridad = $true
+                Registrar-Error "SHA256 exe inválido para $($h.cmd) tras extraer ZIP"
+                Remove-Item -LiteralPath $destino -Force -ErrorAction SilentlyContinue
+                return $false
+            }
             return $ok
         }
         if ($h.tipo -eq 'zip-deno') {
             if ($script:pop -and $script:pop.paso) {
                 $script:pop.paso.Text = "Extrayendo $($script:dlNombrePieza)..."
-                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                Bombeo-Ui
             }
             $ok = Extraer-Zip-Selectivo $tmp 'deno.exe' $destino
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            if ($ok -and $h.sha256exe -and -not (Verificar-Sha256 $destino $h.sha256exe)) {
+                $script:falloIntegridad = $true
+                Registrar-Error "SHA256 exe inválido para $($h.cmd) tras extraer ZIP"
+                Remove-Item -LiteralPath $destino -Force -ErrorAction SilentlyContinue
+                return $false
+            }
             return $ok
         }
     } catch {
@@ -906,6 +1150,8 @@ function Instalar-Herramienta-Directa($h) {
         return $false
     }
     return $false
+
+    }
 }
 
 function Poner-Popup-Barra($pct) {
@@ -1135,25 +1381,15 @@ function Instalar-Si-Falta {
                     }
                     Poner-Popup-Barra $null
                     try { if ($script:pop -and $script:pop.paso) { $script:pop.paso.Refresh() } } catch {}
-                    [System.Windows.Forms.Application]::DoEvents()
+                    Bombeo-Ui
                     $script:falloIntegridad = $false
                     $ok = Instalar-Herramienta-Directa $h
                     if ($script:popupCancelado) { break }
                     if (-not $ok) {
                         if ($script:falloIntegridad) {
-                            Registrar-Error "Sin winget: integridad fallida para $($h.cmd)"
+                            Registrar-Error "Instalación abortada: integridad SHA256 fallida para $($h.cmd) (no se usa winget ni PATH sin pin)"
                         } else {
-                            $wg = Ruta-De 'winget'
-                            if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
-                            if ($wg -and $h.id) {
-                                if ($script:pop -and $script:pop.paso) {
-                                    $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
-                                }
-                                [System.Windows.Forms.Application]::DoEvents()
-                                try {
-                                    Start-Process -FilePath $wg -ArgumentList "install --id $($h.id) -e --silent --accept-source-agreements --accept-package-agreements" -Wait -NoNewWindow
-                                } catch { Registrar-Error "winget $($h.cmd): $($_.Exception.Message)" }
-                            }
+                            Registrar-Error "Instalación directa fallida para $($h.cmd) (solo URL pinneada + SHA256; sin winget)"
                         }
                     }
                     Refrescar-Path
@@ -1197,7 +1433,9 @@ function Instalar-Si-Falta {
     $falta = Faltan
     if ($falta.Count -gt 0) {
         [System.Windows.Forms.MessageBox]::Show(
-            "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet (GitHub) y el antivirus.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.`n`nDetalle en: %APPDATA%\MusicDL\errores.log",
+            (T `
+                ("No se pudo instalar $($falta[0].nombre).`n`nComprueba internet (GitHub) y el antivirus.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.`n`nDetalle en:`n$archErrores") `
+                ("Could not install $($falta[0].nombre).`n`nCheck your internet (GitHub) and antivirus.`nIf a managed PC blocks downloads, ask IT to allow yt-dlp, FFmpeg, Deno and spotDL.`n`nDetails:`n$archErrores")),
             'MusicDL', 'OK', 'Warning') | Out-Null
         return $false
     }
@@ -1222,7 +1460,7 @@ function Actualizar-Herramientas-Directas([switch]$Forzar) {
         } catch { Catch-Log 'Actualizar-Herramientas-Directas' $_ }
     }
     $lblAct.Text = 'Comprobando yt-dlp...'
-    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+    Bombeo-Ui
     $ok = $false
     $h = $script:herramientas | Where-Object { $_.cmd -eq 'yt-dlp' } | Select-Object -First 1
     if ($h) {
@@ -1232,7 +1470,7 @@ function Actualizar-Herramientas-Directas([switch]$Forzar) {
             $lblAct.Text = 'yt-dlp verificado'
         } else {
             $lblAct.Text = 'Actualizando yt-dlp...'
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+            Bombeo-Ui
             try { $ok = Instalar-Herramienta-Directa $h } catch {
                 Registrar-Error "Actualizar yt-dlp (directa): $($_.Exception.Message)"
             }
@@ -1263,6 +1501,7 @@ function Nueva-Etiqueta($padre, $texto, $x, $y, $ancho, $alto, $fuente, $color) 
     $l.Font = $fuente
     $l.ForeColor = $color
     $l.BackColor = [System.Drawing.Color]::Transparent
+    $l.AccessibleName = [string]$texto
     $padre.Controls.Add($l)
     return $l
 }
@@ -1280,6 +1519,9 @@ function Nuevo-Boton($padre, $texto, $x, $y, $ancho, $alto) {
     $b.BackColor = $colPanel
     $b.ForeColor = $colTexto
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $b.AccessibleName = [string]$texto
+    $b.AccessibleDescription = [string]$texto
+    $b.TabStop = $true
     $padre.Controls.Add($b)
     return $b
 }
@@ -1297,6 +1539,9 @@ function Nuevo-BotonPrincipal($padre, $texto, $x, $y, $ancho, $alto, $fuente) {
     $b.FlatAppearance.MouseDownBackColor = $colAcentoOsc
     $b.ForeColor = $colBlanco
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $b.AccessibleName = [string]$texto
+    $b.AccessibleDescription = [string]$texto
+    $b.TabStop = $true
     $padre.Controls.Add($b)
     return $b
 }
@@ -1339,6 +1584,11 @@ function Nueva-Casilla($padre, $texto, $x, $y, $marcada, $ancho) {
     $wrap.Tag = $estado
     $caja.Tag = $estado
     $lbl.Tag = $estado
+    $wrap.AccessibleName = [string]$texto
+    $wrap.AccessibleRole = [System.Windows.Forms.AccessibleRole]::CheckButton
+    $lbl.AccessibleName = [string]$texto
+    $caja.AccessibleName = [string]$texto
+    $wrap.TabStop = $true
 
     $caja.Add_Paint({
         param($s, $e)
@@ -1379,6 +1629,13 @@ function Nueva-Casilla($padre, $texto, $x, $y, $marcada, $ancho) {
     $wrap.Add_Click($toggle)
     $caja.Add_Click($toggle)
     $lbl.Add_Click($toggle)
+    $wrap.Add_KeyDown({
+        param($s, $e)
+        if ($e.KeyCode -eq 'Space' -or $e.KeyCode -eq 'Enter') {
+            $e.SuppressKeyPress = $true
+            & $toggle $s $e
+        }
+    })
 
     Add-Member -InputObject $estado -MemberType ScriptProperty -Name Checked -Value {
         return [bool]$this._checked
@@ -1426,6 +1683,7 @@ function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
     Add-Member -InputObject $estado -NotePropertyName SelectedIndex -NotePropertyValue $idx
     Add-Member -InputObject $estado -NotePropertyName Opciones -NotePropertyValue @($opciones)
     Add-Member -InputObject $estado -NotePropertyName Boton -NotePropertyValue $null
+    Add-Member -InputObject $estado -NotePropertyName Wrap -NotePropertyValue $null
     Add-Member -InputObject $estado -NotePropertyName Drop -NotePropertyValue $null
     Add-Member -InputObject $estado -NotePropertyName CerrarSinReabrir -NotePropertyValue $false
     Add-Member -InputObject $estado -NotePropertyName AlCambiar -NotePropertyValue $null
@@ -1434,6 +1692,7 @@ function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
     $wrap.Location = New-Object System.Drawing.Point($x, $y)
     $wrap.Size = New-Object System.Drawing.Size($ancho, 34)
     $wrap.BackColor = $colBorde
+    $estado.Wrap = $wrap
 
     $btn = New-Object System.Windows.Forms.Button
     $btn.FlatStyle = 'Flat'
@@ -1448,6 +1707,9 @@ function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
     $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
     $btn.Text = "  $($opciones[$idx])"
     $estado.Boton = $btn
+    $btn.AccessibleName = (T 'Lista desplegable' 'Drop-down list')
+    $btn.AccessibleDescription = [string]$opciones[$idx]
+    $btn.TabStop = $true
 
     $flecha = New-Object System.Windows.Forms.Label
     $flecha.Text = [string][char]0x25BE
@@ -1594,6 +1856,8 @@ function Nuevo-Campo($padre, $x, $y, $ancho, $alto, $multi = $false) {
     $t.BackColor = $colCampo
     $t.ForeColor = $colTexto
     $t.Font = $fNormal
+    $t.AccessibleName = if ($multi) { (T 'Campo de enlaces' 'Links field') } else { (T 'Campo de texto' 'Text field') }
+    $t.TabStop = $true
     if ($multi) {
         $t.Multiline = $true
         $t.ScrollBars = 'Vertical'
@@ -1636,6 +1900,17 @@ function Set-BarraValor($b, $valor) {
     $b.value = $v
     $w = [int](($b.ancho * $v) / $b.max)
     $b.fill.Width = [Math]::Max(0, $w)
+}
+
+# Nuevo-Campo devuelve el TextBox; Location/Size reales viven en el Panel padre (borde).
+function Fijar-CampoCaja($campo, $x, $y, $ancho, $alto) {
+    if (-not $campo -or $campo.IsDisposed) { return }
+    $wrap = $campo.Parent
+    if (-not $wrap -or $wrap.IsDisposed) { return }
+    $wrap.Location = New-Object System.Drawing.Point($x, $y)
+    $wrap.Size = New-Object System.Drawing.Size($ancho, $alto)
+    $campo.Location = New-Object System.Drawing.Point(2, 2)
+    $campo.Size = New-Object System.Drawing.Size([Math]::Max(10, $ancho - 4), [Math]::Max(10, $alto - 4))
 }
 function Nuevo-ListBoxOscuro($padre, $x, $y, $ancho, $alto) {
     $wrap = New-Object System.Windows.Forms.Panel
@@ -1774,11 +2049,11 @@ $btnTabList.Add_Click({ Mostrar-Pestana 2 })
 $btnTabAjustes.Add_Click({ Mostrar-Pestana 3 })
 Pintar-Pestanas
 
-Nueva-Etiqueta $tab1 'ENLACES' 24 20 220 18 $fEtiqueta $colAcento | Out-Null
+$script:lblTabEnlaces = Nueva-Etiqueta $tab1 'ENLACES' 24 20 220 18 $fEtiqueta $colAcento
 $txtEnlace = Nuevo-Campo $tab1 24 44 560 100 $true
 
 $lblAyuda = New-Object System.Windows.Forms.Label
-$lblAyuda.Text = "Pega enlaces de YouTube, SoundCloud o Spotify.`r`nVarios: uno por línea."
+$lblAyuda.Text = "1. Copia el enlace de la canción o lista.`r`n2. Pégalo aquí (o pulsa PEGAR). Varios: uno por línea."
 $lblAyuda.ForeColor = $colTenue
 $lblAyuda.BackColor = $colCampo
 $lblAyuda.Location = New-Object System.Drawing.Point(8, 8)
@@ -1788,34 +2063,41 @@ $txtEnlace.Controls.Add($lblAyuda)
 
 $btnPegar  = Nuevo-Boton $tab1 'PEGAR'  600 44 116 42
 $btnBorrar = Nuevo-Boton $tab1 'BORRAR' 600 96 116 42
+$tips.SetToolTip($btnPegar, 'Pega el enlace que has copiado (Ctrl+C) desde YouTube, SoundCloud o Spotify')
 
-Nueva-Etiqueta $tab1 'SALIDA' 24 164 220 18 $fEtiqueta $colAcento | Out-Null
-Nueva-Etiqueta $tab1 'FORMATO' 24 190 340 16 $fEtiqueta $colTenue | Out-Null
+$lblSalida = Nueva-Etiqueta $tab1 'SALIDA' 24 164 220 18 $fEtiqueta $colAcento
+$lblFormato = Nueva-Etiqueta $tab1 'FORMATO' 24 190 340 16 $fEtiqueta $colTenue
 $cmbFormato = Nuevo-Combo $tab1 24 210 340 $formatosEtiqueta $config.formato
-$tips.SetToolTip($cmbFormato.Boton, "Original: deja el audio tal como lo envía la web (mejor opción para DJs).`nConvertir a FLAC/WAV/MP3 320 NO mejora el sonido de YouTube ni SoundCloud.")
+$tips.SetToolTip($cmbFormato.Boton, "MP3: el más compatible (móvil, coche, casi todo).`nOriginal: deja el audio tal como lo envía la web (mejor para DJs).`nConvertir a FLAC/WAV no mejora el sonido de YouTube ni SoundCloud.")
 
-Nueva-Etiqueta $tab1 'CARPETAS' 384 190 340 16 $fEtiqueta $colTenue | Out-Null
+$lblCarpetas = Nueva-Etiqueta $tab1 'CARPETAS' 384 190 340 16 $fEtiqueta $colTenue
 $cmbOrganizar = Nuevo-Combo $tab1 384 210 332 @(
     'Todas las canciones juntas',
     'Una carpeta por cada lista',
     'Una carpeta por cada artista'
 ) $config.organizar
 
-Nueva-Etiqueta $tab1 'DESTINO' 24 260 220 16 $fEtiqueta $colTenue | Out-Null
+$lblDestino = Nueva-Etiqueta $tab1 'DÓNDE SE GUARDA' 24 260 400 16 $fEtiqueta $colTenue
 $txtCarpeta = Nuevo-Campo $tab1 24 280 560 34 $false
 $txtCarpeta.ReadOnly = $true
-$txtCarpeta.Text = [string]$config.carpeta
+$script:carpetaReal = Normalizar-Carpeta-Destino $config.carpeta
+$txtCarpeta.Text = Texto-Destino-Amigable $script:carpetaReal
+$tips.SetToolTip($txtCarpeta, $script:carpetaReal)
 $btnCambiar = Nuevo-Boton $tab1 'CAMBIAR' 600 280 116 34
+$tips.SetToolTip($btnCambiar, 'Elige otra carpeta (Música, Documentos, Escritorio o Descargas)')
 
-$chkPortada = Nueva-Casilla $tab1 'Portada y metadatos (artista, título)' 24 332 $config.portada 680
+$chkPortada = Nueva-Casilla $tab1 'Guardar carátula y nombre del artista' 24 332 $config.portada 680
 $chkLimpiar = Nueva-Casilla $tab1 'Limpiar nombres (Official Video, Lyrics, HD…)' 24 360 $config.limpiar 680
-$chkSaltar  = Nueva-Casilla $tab1 'No repetir descargas (historial por formato)' 24 388 $config.saltar 480
+$chkSaltar  = Nueva-Casilla $tab1 'No volver a bajar la misma canción' 24 388 $config.saltar 480
 $lnkOlvidar = Nuevo-Enlace $tab1 'Olvidar historial' 520 388 196 'MiddleRight'
+
+$lnkMasOpciones = Nuevo-Enlace $tab1 'Más opciones' 24 228 200 'MiddleLeft'
+$tips.SetToolTip($lnkMasOpciones, 'Mostrar u ocultar formato, carpetas y opciones avanzadas')
 
 $btnDescargar = Nuevo-BotonPrincipal $tab1 'DESCARGAR' 24 434 360 52 $fBoton
 $btnCancelar  = Nuevo-Boton $tab1 'CANCELAR' 400 434 140 52
 $btnCancelar.Enabled = $false
-$btnElegir = Nuevo-Boton $tab1 'ELEGIR…' 556 434 160 52
+$btnElegir = Nuevo-Boton $tab1 'Elegir canciones…' 556 434 160 52
 $tips.SetToolTip($btnElegir, 'YouTube/SoundCloud: elige canciones de la lista. Spotify: usa Descargar (no admite elección una a una).')
 $tips.SetToolTip($btnDescargar, 'Si ya hay una descarga, el enlace se añade a la cola')
 
@@ -1827,6 +2109,77 @@ $lblEstado.AutoEllipsis = $true
 $lblCalidad = Nueva-Etiqueta $tab1 '' 24 594 692 20 $fPequena $colAcento
 
 $lstResultados = Nuevo-ListBoxOscuro $tab1 24 624 692 130
+
+function Aplicar-Diseno-Descarga {
+    $simple = [bool]$config.modoSimple
+    $visAdv = -not $simple
+    foreach ($c in @($lblSalida, $lblFormato, $lblCarpetas, $cmbFormato.Wrap, $cmbOrganizar.Wrap,
+                     $chkPortada.Wrap, $chkLimpiar.Wrap, $chkSaltar.Wrap, $lnkOlvidar, $btnElegir)) {
+        if ($c) { $c.Visible = $visAdv }
+    }
+    if ($lnkMasOpciones) {
+        $lnkMasOpciones.Text = if ($simple) {
+            (T 'Más opciones' 'More options')
+        } else {
+            (T 'Menos opciones' 'Fewer options')
+        }
+    }
+    $wrapLista = if ($lstResultados) { $lstResultados.Parent } else { $null }
+    if ($simple) {
+        $btnPegar.Location = New-Object System.Drawing.Point(24, 152)
+        $btnPegar.Size = New-Object System.Drawing.Size(140, 36)
+        $btnBorrar.Location = New-Object System.Drawing.Point(176, 152)
+        $btnBorrar.Size = New-Object System.Drawing.Size(140, 36)
+        $lblDestino.Location = New-Object System.Drawing.Point(24, 204)
+        Fijar-CampoCaja $txtCarpeta 24 224 500 34
+        $btnCambiar.Location = New-Object System.Drawing.Point(536, 224)
+        $btnCambiar.Size = New-Object System.Drawing.Size(180, 34)
+        $lnkMasOpciones.Location = New-Object System.Drawing.Point(24, 270)
+        $btnDescargar.Location = New-Object System.Drawing.Point(24, 310)
+        $btnDescargar.Size = New-Object System.Drawing.Size(520, 52)
+        $btnCancelar.Location = New-Object System.Drawing.Point(560, 310)
+        $btnCancelar.Size = New-Object System.Drawing.Size(156, 52)
+        $lblCola.Location = New-Object System.Drawing.Point(24, 376)
+        if ($barra -and $barra.track) { $barra.track.Location = New-Object System.Drawing.Point(24, 404) }
+        $lblEstado.Location = New-Object System.Drawing.Point(24, 426)
+        $lblCalidad.Location = New-Object System.Drawing.Point(24, 470)
+        if ($wrapLista) {
+            $wrapLista.Location = New-Object System.Drawing.Point(24, 500)
+            $wrapLista.Size = New-Object System.Drawing.Size(692, 254)
+            $lstResultados.Size = New-Object System.Drawing.Size(690, 252)
+        }
+    } else {
+        $btnPegar.Location = New-Object System.Drawing.Point(600, 44)
+        $btnPegar.Size = New-Object System.Drawing.Size(116, 42)
+        $btnBorrar.Location = New-Object System.Drawing.Point(600, 96)
+        $btnBorrar.Size = New-Object System.Drawing.Size(116, 42)
+        $lblDestino.Location = New-Object System.Drawing.Point(24, 260)
+        Fijar-CampoCaja $txtCarpeta 24 280 560 34
+        $btnCambiar.Location = New-Object System.Drawing.Point(600, 280)
+        $btnCambiar.Size = New-Object System.Drawing.Size(116, 34)
+        $lnkMasOpciones.Location = New-Object System.Drawing.Point(24, 420)
+        $btnDescargar.Location = New-Object System.Drawing.Point(24, 454)
+        $btnDescargar.Size = New-Object System.Drawing.Size(360, 52)
+        $btnCancelar.Location = New-Object System.Drawing.Point(400, 454)
+        $btnCancelar.Size = New-Object System.Drawing.Size(140, 52)
+        $btnElegir.Location = New-Object System.Drawing.Point(556, 454)
+        $lblCola.Location = New-Object System.Drawing.Point(24, 520)
+        if ($barra -and $barra.track) { $barra.track.Location = New-Object System.Drawing.Point(24, 548) }
+        $lblEstado.Location = New-Object System.Drawing.Point(24, 570)
+        $lblCalidad.Location = New-Object System.Drawing.Point(24, 614)
+        if ($wrapLista) {
+            $wrapLista.Location = New-Object System.Drawing.Point(24, 644)
+            $wrapLista.Size = New-Object System.Drawing.Size(692, 110)
+            $lstResultados.Size = New-Object System.Drawing.Size(690, 108)
+        }
+    }
+    # Z-order: destino y acciones por encima de combos/lista ocultos o reposicionados
+    if ($wrapLista) { $wrapLista.SendToBack() }
+    foreach ($c in @($lblDestino, $txtCarpeta.Parent, $btnCambiar, $lnkMasOpciones, $btnDescargar, $btnCancelar, $btnElegir)) {
+        if ($c -and -not $c.IsDisposed) { $c.BringToFront() }
+    }
+}
+Aplicar-Diseno-Descarga
 
 Nueva-Etiqueta $tab2 'LISTAS GUARDADAS' 24 20 400 18 $fEtiqueta $colAcento | Out-Null
 Nueva-Etiqueta $tab2 'Al actualizar se bajan solo las canciones nuevas del formato elegido.' 24 46 690 22 $fPequena $colSuave | Out-Null
@@ -1886,10 +2239,10 @@ function Sync-Cmb-Drm-Yt {
     } finally { $script:syncDrmUi = $false }
 }
 
-Nueva-Etiqueta $tab3 'AJUSTES' 24 20 400 18 $fEtiqueta $colAcento | Out-Null
-Nueva-Etiqueta $tab3 'PROTECCIÓN DRM' 24 64 400 18 $fEtiqueta $colAcento | Out-Null
-Nueva-Etiqueta $tab3 "Si una canción tiene DRM (protección anticopia) y no se puede bajar de la fuente,`nMusicDL puede buscar la misma en YouTube." 24 90 690 44 $fPequena $colSuave | Out-Null
-Nueva-Etiqueta $tab3 'COMPORTAMIENTO' 24 150 400 16 $fEtiqueta $colTenue | Out-Null
+$script:lblAjustesTitulo = Nueva-Etiqueta $tab3 'AJUSTES' 24 20 400 18 $fEtiqueta $colAcento
+$script:lblDrmTitulo = Nueva-Etiqueta $tab3 'PROTECCIÓN DRM' 24 64 400 18 $fEtiqueta $colAcento
+$script:lblDrmDesc = Nueva-Etiqueta $tab3 "Si una canción tiene DRM (protección anticopia) y no se puede bajar de la fuente,`nMusicDL puede buscar la misma en YouTube." 24 90 690 44 $fPequena $colSuave
+$script:lblDrmComp = Nueva-Etiqueta $tab3 'COMPORTAMIENTO' 24 150 400 16 $fEtiqueta $colTenue
 $opcionesDrm = @(
     'Preguntar siempre',
     'Buscar en YouTube sin preguntar',
@@ -1903,7 +2256,19 @@ $script:cmbDrmYt.AlCambiar = {
     try { Guardar-Config-Disco } catch { Registrar-Error "Config DRM UI: $($_.Exception.Message)" }
 }
 $tips.SetToolTip($script:cmbDrmYt.Boton, "También se puede fijar desde el popup de DRM marcando «No volver a preguntar»:`nSí = buscar siempre · No = no buscar nunca.")
-Nueva-Etiqueta $tab3 'Puedes cambiarlo aquí en cualquier momento. El popup de DRM usa la misma preferencia.' 24 220 690 40 $fPequena $colTenue | Out-Null
+$script:lblDrmNota = Nueva-Etiqueta $tab3 'Puedes cambiarlo aquí en cualquier momento. El popup de DRM usa la misma preferencia.' 24 220 690 40 $fPequena $colTenue
+
+$script:lblIdioma = Nueva-Etiqueta $tab3 'IDIOMA / LANGUAGE' 24 270 400 16 $fEtiqueta $colTenue
+$idxIdioma = if ((Idioma-Actual) -eq 'en') { 1 } else { 0 }
+$script:cmbIdioma = Nuevo-Combo $tab3 24 292 320 @('Español', 'English') $idxIdioma
+$script:cmbIdioma.AlCambiar = {
+    param($idx)
+    if ($script:syncIdiomaUi) { return }
+    $config.idioma = if ($idx -eq 1) { 'en' } else { 'es' }
+    try { Aplicar-Idioma } catch { Catch-Log 'Cambiar-Idioma' $_ }
+    try { Guardar-Config-Disco } catch { Registrar-Error "Config idioma: $($_.Exception.Message)" }
+}
+$script:lblIdiomaNota = Nueva-Etiqueta $tab3 'Cambia textos de la interfaz (español / English).' 24 336 690 24 $fPequena $colTenue
 
 $btnAbrirUltima = Nuevo-Boton $form 'Última descarga' 20 940 170 36
 $btnAbrirUltima.Enabled = $false
@@ -1923,6 +2288,126 @@ $miDesinstalar = $menu.Items.Add('Desinstalar MusicDL...')
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miVersion     = $menu.Items.Add("Versión $versionApp")
 $miVersion.Enabled = $false
+
+function Opciones-Drm-Localizadas {
+    return @(
+        (T 'Preguntar siempre' 'Always ask'),
+        (T 'Buscar en YouTube sin preguntar' 'Search YouTube without asking'),
+        (T 'No buscar en YouTube' 'Do not search YouTube')
+    )
+}
+function Opciones-Organizar-Localizadas {
+    return @(
+        (T 'Todas las canciones juntas' 'All tracks together'),
+        (T 'Una carpeta por cada lista' 'One folder per playlist'),
+        (T 'Una carpeta por cada artista' 'One folder per artist')
+    )
+}
+function Aplicar-Idioma {
+    $en = ((Idioma-Actual) -eq 'en')
+    $formatosEtiqueta = if ($en) { $script:formatosEtiquetaEn } else { $script:formatosEtiquetaEs }
+    if ($script:lblTabEnlaces) { $script:lblTabEnlaces.Text = (T 'ENLACES' 'LINKS') }
+    if ($lblAyuda) {
+        $lblAyuda.Text = (T `
+            "1. Copia el enlace de la canción o lista.`r`n2. Pégalo aquí (o pulsa PEGAR). Varios: uno por línea." `
+            "1. Copy the track or playlist link.`r`n2. Paste it here (or press PASTE). Several: one per line.")
+    }
+    if ($btnTabDesc) { $btnTabDesc.Text = (T 'DESCARGAR' 'DOWNLOAD') }
+    if ($btnTabList) { $btnTabList.Text = (T 'MIS LISTAS' 'MY LISTS') }
+    if ($btnTabAjustes) { $btnTabAjustes.Text = (T 'AJUSTES' 'SETTINGS') }
+    if ($btnPegar) { $btnPegar.Text = (T 'PEGAR' 'PASTE') }
+    if ($btnBorrar) { $btnBorrar.Text = (T 'BORRAR' 'CLEAR') }
+    if ($lblSalida) { $lblSalida.Text = (T 'SALIDA' 'OUTPUT') }
+    if ($lblFormato) { $lblFormato.Text = (T 'FORMATO' 'FORMAT') }
+    if ($lblCarpetas) { $lblCarpetas.Text = (T 'CARPETAS' 'FOLDERS') }
+    if ($lblDestino) { $lblDestino.Text = (T 'DÓNDE SE GUARDA' 'SAVE LOCATION') }
+    if ($btnCambiar) { $btnCambiar.Text = (T 'CAMBIAR' 'CHANGE') }
+    if ($chkPortada -and $chkPortada.Etiqueta) {
+        $chkPortada.Etiqueta.Text = (T 'Guardar carátula y nombre del artista' 'Save artwork and artist name')
+    }
+    if ($chkLimpiar -and $chkLimpiar.Etiqueta) {
+        $chkLimpiar.Etiqueta.Text = (T 'Limpiar nombres (Official Video, Lyrics, HD…)' 'Clean titles (Official Video, Lyrics, HD…)')
+    }
+    if ($chkSaltar -and $chkSaltar.Etiqueta) {
+        $chkSaltar.Etiqueta.Text = (T 'No volver a bajar la misma canción' 'Skip tracks already downloaded')
+    }
+    if ($lnkOlvidar) { $lnkOlvidar.Text = (T 'Olvidar historial' 'Clear history') }
+    if ($btnDescargar) { $btnDescargar.Text = (T 'DESCARGAR' 'DOWNLOAD') }
+    if ($btnCancelar) { $btnCancelar.Text = (T 'CANCELAR' 'CANCEL') }
+    if ($btnElegir) { $btnElegir.Text = (T 'Elegir canciones…' 'Pick tracks…') }
+    if ($lblEstado -and ($lblEstado.Text -match '^(Listo|Ready)')) {
+        $lblEstado.Text = (T 'Listo. Pega un enlace y pulsa Descargar.' 'Ready. Paste a link and press Download.')
+    }
+    if ($btnAbrirUltima) { $btnAbrirUltima.Text = (T 'Última descarga' 'Last download') }
+    if ($btnAbrir) { $btnAbrir.Text = (T 'Carpeta de música' 'Music folder') }
+    if ($btnExpandir) { $btnExpandir.Text = (T 'GRANDE' 'FULL') }
+    if ($btnMiniDl) { $btnMiniDl.Text = (T 'AÑADIR' 'ADD') }
+    if ($btnMiniCancel) { $btnMiniCancel.Text = (T 'CANCELAR' 'CANCEL') }
+    if ($chkBajarCopiar -and $chkBajarCopiar.Etiqueta) {
+        $chkBajarCopiar.Etiqueta.Text = (T 'Al copiar enlace, preguntar antes de descargar (Mini)' 'When copying a link, ask before downloading (Mini)')
+    }
+    if ($lblMiniEstado -and ($lblMiniEstado.Text -match '^(Listo|Ready)')) {
+        $lblMiniEstado.Text = (T 'Listo.' 'Ready.')
+    }
+    if ($formMini) { $formMini.Text = (T 'MusicDL (mini)' 'MusicDL (mini)') }
+    if ($miDetalles) { $miDetalles.Text = (T 'Ver detalles técnicos de la última descarga' 'View technical details of the last download') }
+    if ($miErrores) { $miErrores.Text = (T 'Ver registro de errores internos' 'View internal error log') }
+    if ($miActApp) { $miActApp.Text = (T 'Buscar una versión nueva del programa' 'Check for a new program version') }
+    if ($miDesinstalar) { $miDesinstalar.Text = (T 'Desinstalar MusicDL...' 'Uninstall MusicDL...') }
+    if ($miVersion) { $miVersion.Text = (T "Versión $versionApp" "Version $versionApp") }
+    if ($script:lblAjustesTitulo) { $script:lblAjustesTitulo.Text = (T 'AJUSTES' 'SETTINGS') }
+    if ($script:lblDrmTitulo) { $script:lblDrmTitulo.Text = (T 'PROTECCIÓN DRM' 'DRM PROTECTION') }
+    if ($script:lblDrmDesc) {
+        $script:lblDrmDesc.Text = (T `
+            "Si una canción tiene DRM (protección anticopia) y no se puede bajar de la fuente,`nMusicDL puede buscar la misma en YouTube." `
+            "If a track has DRM (copy protection) and cannot be downloaded from the source,`nMusicDL can search for it on YouTube.")
+    }
+    if ($script:lblDrmComp) { $script:lblDrmComp.Text = (T 'COMPORTAMIENTO' 'BEHAVIOR') }
+    if ($script:lblDrmNota) {
+        $script:lblDrmNota.Text = (T `
+            'Puedes cambiarlo aquí en cualquier momento. El popup de DRM usa la misma preferencia.' `
+            'You can change this anytime. The DRM popup uses the same preference.')
+    }
+    if ($script:lblIdiomaNota) {
+        $script:lblIdiomaNota.Text = (T `
+            'Cambia textos de la interfaz (español / English).' `
+            'Switch interface language (Spanish / English).')
+    }
+    if ($cmbFormato) {
+        $idx = [int]$cmbFormato.SelectedIndex
+        $cmbFormato.Opciones = @($formatosEtiqueta)
+        if ($idx -ge 0 -and $idx -lt $formatosEtiqueta.Count) {
+            $cmbFormato.SelectedIndex = $idx
+            $cmbFormato.Boton.Text = "  $($formatosEtiqueta[$idx])"
+        }
+    }
+    if ($cmbOrganizar) {
+        $opsOrg = Opciones-Organizar-Localizadas
+        $idx = [int]$cmbOrganizar.SelectedIndex
+        $cmbOrganizar.Opciones = @($opsOrg)
+        if ($idx -ge 0 -and $idx -lt $opsOrg.Count) {
+            $cmbOrganizar.SelectedIndex = $idx
+            $cmbOrganizar.Boton.Text = "  $($opsOrg[$idx])"
+        }
+    }
+    if ($script:cmbDrmYt) {
+        $ops = Opciones-Drm-Localizadas
+        $idx = Indice-Drm-Yt
+        $script:cmbDrmYt.Opciones = @($ops)
+        $script:cmbDrmYt.SelectedIndex = $idx
+        $script:cmbDrmYt.Boton.Text = "  $($ops[$idx])"
+    }
+    $script:syncIdiomaUi = $true
+    try {
+        if ($script:cmbIdioma) {
+            $ii = if ($en) { 1 } else { 0 }
+            $script:cmbIdioma.SelectedIndex = $ii
+            $script:cmbIdioma.Boton.Text = "  $(@('Español', 'English')[$ii])"
+        }
+    } finally { $script:syncIdiomaUi = $false }
+    try { Aplicar-Diseno-Descarga } catch { Catch-Log 'Aplicar-Idioma-Diseno' $_ }
+    try { Pintar-Pestanas } catch { Catch-Log 'Aplicar-Idioma-Pestanas' $_ }
+}
 #endregion UI-Principal
 
 #region UI-Mini
@@ -2001,10 +2486,8 @@ function Guardar-Config {
     if ($script:desinstalado) { return }
     $config.formato   = $cmbFormato.SelectedIndex
     $config.organizar = $cmbOrganizar.SelectedIndex
-    $segura = Normalizar-Carpeta-Destino $txtCarpeta.Text
-    if (-not (Es-Carpeta-Destino-Segura $txtCarpeta.Text)) {
-        $txtCarpeta.Text = $segura
-    }
+    $segura = Carpeta-UI-Actual
+    Fijar-Carpeta-UI $segura
     $config.carpeta   = $segura
     $config.portada   = $chkPortada.Checked
     $config.limpiar   = $chkLimpiar.Checked
@@ -2012,6 +2495,7 @@ function Guardar-Config {
     $config.noPreguntarBorradas = $chkNoPreguntar.Checked
     $config.bajarAlCopiar = $chkBajarCopiar.Checked
     $config.ventanaMini = $script:enMini
+    $config.modoSimple = [bool]$config.modoSimple
     $config.listas    = @($script:listas)
     if ($script:cmbDrmYt) { Aplicar-Indice-Drm-Yt $script:cmbDrmYt.SelectedIndex }
     Guardar-Config-Disco
@@ -2095,7 +2579,7 @@ function Comprobar-App($manual = $false) {
     try {
         $script:http = New-Object System.Net.Http.HttpClient
         $script:http.Timeout = [TimeSpan]::FromSeconds(30)
-        $script:http.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.36')
+        $script:http.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.40')
         $script:tareaApp = $script:http.GetByteArrayAsync($urlApp + '?v=' + [DateTime]::Now.Ticks)
         $script:firmaUrl = if ($urlFirma) { $urlFirma } else { $urlApp + '.sig' }
         $script:tareaFirma = $script:http.GetStringAsync($script:firmaUrl + '?v=' + [DateTime]::Now.Ticks)
@@ -2124,11 +2608,6 @@ $timerApp.Add_Tick({
     $bytes = $t.Result
     $texto = [Text.Encoding]::UTF8.GetString($bytes)
     $firma = $tf.Result
-    if (-not (Verificar-Firma $bytes $firma)) {
-        Aviso 'La versión nueva no tiene una firma válida. Por seguridad no se instalará. Avisa a quien te pasó el programa.' 'Warning'
-        Registrar-Error 'Actualización rechazada: firma inválida'
-        return
-    }
     if ($texto -notmatch "(?m)^`$versionApp = '([\d\.]+)'" -or $texto -notmatch '^\s*<# :') {
         if ($script:checkManual) { Aviso 'El archivo de la versión nueva no parece correcto.' 'Warning' }
         return
@@ -2140,18 +2619,33 @@ $timerApp.Add_Tick({
         if ($script:checkManual) { Aviso "Ya tienes la última versión ($versionApp)." }
         return
     }
+    if (-not (Verificar-Firma $bytes $firma)) {
+        Aviso 'La versión nueva no tiene una firma válida. Por seguridad no se instalará. Avisa a quien te pasó el programa.' 'Warning'
+        Registrar-Error "Actualización rechazada: firma inválida (remota $nueva)"
+        return
+    }
     if ($script:modo -ne $null -and -not $script:checkManual) { return }
     if (-not (Pregunta "Hay una versión nueva de MusicDL ($nueva), firmada por el autor. Tú tienes la $versionApp.`n`n¿Actualizar ahora?")) { return }
-    Instalar-VersionApp $texto
+    Instalar-VersionApp $bytes $firma
 })
 
-function Instalar-VersionApp($texto) {
+function Instalar-VersionApp([byte[]]$bytes, [string]$firmaB64) {
+    return Con-ErrorActionStop {
     try {
         $bat = $env:DM_BAT
-        # Guardar versión anterior para rollback
+        $sigPath = $bat + '.sig'
+        $prevSig = $archPrevBat + '.sig'
+        # Guardar versión anterior (+ firma) para rollback
         Copy-Item -LiteralPath $bat -Destination $archPrevBat -Force
-        $texto = $texto -replace "(?<!`r)`n", "`r`n"
-        [IO.File]::WriteAllText($bat, $texto, (New-Object System.Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $sigPath) {
+            Copy-Item -LiteralPath $sigPath -Destination $prevSig -Force
+        } else {
+            Remove-Item -LiteralPath $prevSig -Force -ErrorAction SilentlyContinue
+        }
+        # Escribir exactamente los bytes firmados (LF) para que el .sig siga siendo válido
+        [IO.File]::WriteAllBytes($bat, $bytes)
+        $firmaLimpia = ([string]$firmaB64) -replace '\s', ''
+        [IO.File]::WriteAllText($sigPath, $firmaLimpia, [Text.Encoding]::ASCII)
         [IO.File]::WriteAllText((Join-Path $dirApp 'update-pending.flag'), (Hoy), [Text.Encoding]::UTF8)
         Remove-Item -LiteralPath (Join-Path $dirApp 'esperando-arranque.flag') -Force -ErrorAction SilentlyContinue
         if ($script:tarea) { Matar-Tarea }
@@ -2163,6 +2657,8 @@ function Instalar-VersionApp($texto) {
     } catch {
         Registrar-Error "Instalar versión: $($_.Exception.Message)"
         Aviso "No se ha podido actualizar el programa:`n`n$($_.Exception.Message)" 'Warning'
+    }
+
     }
 }
 #endregion Actualizacion
@@ -2499,10 +2995,10 @@ function Preparar-Ytdlp {
 
 function Construir-Args($enlaces, $sync, $indices, $carpetaForzada = $null, $plantillaForzada = $null) {
     $fmt = $formatos[$cmbFormato.SelectedIndex]
-    $carpetaRaw = if ($carpetaForzada) { [string]$carpetaForzada.TrimEnd('\') } else { $txtCarpeta.Text.TrimEnd('\') }
+    $carpetaRaw = if ($carpetaForzada) { [string]$carpetaForzada.TrimEnd('\') } else { Carpeta-UI-Actual }
     $carpeta = Normalizar-Carpeta-Destino $carpetaRaw
     if (-not (Es-Carpeta-Destino-Segura $carpetaRaw)) {
-        if ($txtCarpeta -and -not $carpetaForzada) { $txtCarpeta.Text = $carpeta }
+        if (-not $carpetaForzada) { Fijar-Carpeta-UI $carpeta }
     }
     $a = New-Object System.Collections.Generic.List[string]
     $a.AddRange([string[]]@('--newline', '--progress', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
@@ -2593,7 +3089,7 @@ function Nombre-Carpeta-Seguro($nombre) {
 
 function Carpeta-Padre-DrmYt($d) {
     # Carpeta de la lista (o raíz) dentro de la cual irá la subcarpeta YouTube.
-    $raiz = if ($d -and $d.carpeta) { [string]$d.carpeta.TrimEnd('\') } else { $txtCarpeta.Text.TrimEnd('\') }
+    $raiz = if ($d -and $d.carpeta) { [string]$d.carpeta.TrimEnd('\') } else { (Carpeta-UI-Actual) }
 
     if ($d -and $d.carpetaLista) {
         $c = [string]$d.carpetaLista.TrimEnd('\')
@@ -2622,48 +3118,71 @@ function Carpeta-Padre-DrmYt($d) {
     return $raiz
 }
 
-function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
-    $ytdlp = Preparar-Ytdlp
-    if (-not $ytdlp) { return }
-
-    $carpeta = Normalizar-Carpeta-Destino $txtCarpeta.Text
-    if (-not (Es-Carpeta-Destino-Segura $txtCarpeta.Text)) {
-        $txtCarpeta.Text = $carpeta
-        Aviso 'La carpeta no estaba permitida; se usará la carpeta por defecto (dentro de tu perfil).' 'Warning'
+function Preparar-Carpeta-Y-Config-Descarga {
+    $carpeta = Carpeta-UI-Actual
+    if (-not (Es-Carpeta-Destino-Segura $script:carpetaReal)) {
+        Fijar-Carpeta-UI $carpeta
+        Aviso (T 'La carpeta no estaba permitida; se usará la carpeta por defecto (dentro de tu perfil).' 'That folder was not allowed; the default folder (inside your profile) will be used.') 'Warning'
     }
-    try { New-Item -ItemType Directory -Force -Path $carpeta -ErrorAction Stop | Out-Null } catch {
-        Aviso 'No se puede usar esa carpeta. Pulsa "Cambiar..." y elige otra.' 'Warning'; return
+    try {
+        New-Item -ItemType Directory -Force -Path $carpeta -ErrorAction Stop | Out-Null
+    } catch {
+        Aviso (T 'No se puede usar esa carpeta. Pulsa "Cambiar..." y elige otra.' 'Cannot use that folder. Press "Change..." and pick another.') 'Warning'
+        return $null
     }
     Guardar-Config
+    return $carpeta
+}
 
-    $built = Construir-Args $enlaces $sync $indices
-    $porUrl = @{}
-    if ($sync) { foreach ($x in $script:listas) { if ($built.finales -contains $x.url) { $porUrl[$x.url] = $x } } }
-
-    $script:dl = @{
+function Nuevo-Estado-Descarga {
+    param(
+        $built,
+        [int]$total,
+        [string]$motor,
+        $sync = $false,
+        $porUrl = @{},
+        $calidad = $null
+    )
+    return @{
         nuevas = 0; saltadas = 0; nErrores = 0; errores = New-Object System.Collections.ArrayList
-        actual = 1; total = [Math]::Max($built.finales.Count, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
+        actual = 1; total = [Math]::Max($total, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
         idsSaltados = New-Object System.Collections.ArrayList
         sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
-        inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = $null
-        carpetaEscaneo = $null; motor = 'yt-dlp'
+        inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = $calidad
+        carpetaEscaneo = $null; motor = $motor
         completados = New-Object System.Collections.Generic.List[string]
         indiceUrl = 0
         drmPendientes = New-Object System.Collections.ArrayList
         drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
         nombreLista = $null; carpetaLista = $null
     }
+}
+
+function Arrancar-Ui-Descarga([string]$estadoMsg, [string]$calidadTxt = '') {
+    Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
+    $lstResultados.Items.Clear()
+    $lblCalidad.Text = $calidadTxt
+    if (-not $script:enMini) { Mostrar-Pestana 1 }
+    Modo 'descarga'
+    Barra-Tarea 1
+    Estado $estadoMsg
+}
+
+function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
+    $ytdlp = Preparar-Ytdlp
+    if (-not $ytdlp) { return }
+    if (-not (Preparar-Carpeta-Y-Config-Descarga)) { return }
+
+    $built = Construir-Args $enlaces $sync $indices
+    $porUrl = @{}
+    if ($sync) { foreach ($x in $script:listas) { if ($built.finales -contains $x.url) { $porUrl[$x.url] = $x } } }
+
+    $script:dl = Nuevo-Estado-Descarga $built $built.finales.Count 'yt-dlp' $sync $porUrl $null
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = $indices; motor = 'yt-dlp' }
     $script:ultimosArgsLista = [string[]]@($built.args)
     $script:ultimosArgs = Formato-Args-Informe $script:ultimosArgsLista
 
-    Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
-    $lstResultados.Items.Clear()
-    $lblCalidad.Text = ''
-    if (-not $script:enMini) { Mostrar-Pestana 1 }
-    Modo 'descarga'
-    Barra-Tarea 1
-    Estado 'Empezando la descarga...'
+    Arrancar-Ui-Descarga (T 'Empezando la descarga...' 'Starting download...')
     Iniciar-Tarea $ytdlp $script:ultimosArgsLista { param($l) Procesar-Linea $l } { param($c) Terminar-Descarga $c } 0 'descarga'
 }
 
@@ -2685,13 +3204,13 @@ function Resolver-Spotify-Urls($enlaces) {
         $proc = Start-Process -FilePath $spotdl -ArgumentList $argsList.ToArray() -NoNewWindow -PassThru `
             -RedirectStandardOutput $rS -RedirectStandardError $rE
         $script:popupProc = $proc
-        while ($proc -and -not $proc.HasExited) {
-            if ($script:popupCancelado) {
-                try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch { Catch-Log 'Resolver-Spotify-Urls' $_ }
-                break
-            }
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 40
+        $espera = Esperar-Proceso-Con-Timeout -proc $proc -timeoutSeg 600 -contexto 'Resolver-Spotify-Urls' -siCancelar {
+            [bool]$script:popupCancelado
+        }
+        if ($espera -eq 'timeout') {
+            Registrar-Error 'Resolver-Spotify-Urls: spotDL excedió 600s'
+            $script:popupProc = $null
+            return @()
         }
     } catch {
         Registrar-Error "spotdl url: $($_.Exception.Message)"
@@ -2720,36 +3239,28 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     if (-not $ytdlp) { return }
     Refrescar-Path
     if (-not (Ruta-De 'ffmpeg')) {
-        Aviso 'Falta FFmpeg. Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
+        Aviso (T 'Falta FFmpeg. Cierra y vuelve a abrir el programa para instalarlo.' 'FFmpeg is missing. Close and reopen the program to install it.') 'Warning'
         return
     }
     if (-not (Ruta-De 'deno')) {
-        Aviso 'Falta Deno (necesario para YouTube). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
+        Aviso (T 'Falta Deno (necesario para YouTube). Cierra y vuelve a abrir el programa para instalarlo.' 'Deno is missing (needed for YouTube). Close and reopen the program to install it.') 'Warning'
         return
     }
 
-    $carpeta = Normalizar-Carpeta-Destino $txtCarpeta.Text
-    if (-not (Es-Carpeta-Destino-Segura $txtCarpeta.Text)) {
-        $txtCarpeta.Text = $carpeta
-        Aviso 'La carpeta no estaba permitida; se usará la carpeta por defecto (dentro de tu perfil).' 'Warning'
-    }
-    try { New-Item -ItemType Directory -Force -Path $carpeta -ErrorAction Stop | Out-Null } catch {
-        Aviso 'No se puede usar esa carpeta. Pulsa "Cambiar..." y elige otra.' 'Warning'; return
-    }
-    Guardar-Config
+    if (-not (Preparar-Carpeta-Y-Config-Descarga)) { return }
 
     $script:ytResueltosSp = @()
     $script:enlacesSpResolve = @($enlaces)
     $script:popupCancelado = $false
-    $script:pop = Nuevo-Popup 'Spotify' "Buscando las canciones en YouTube...`nspotDL empareja; yt-dlp descarga (evita errores 403)." $true
+    $script:pop = Nuevo-Popup 'Spotify' (T "Buscando las canciones en YouTube...`nspotDL empareja; yt-dlp descarga (evita errores 403)." "Looking up tracks on YouTube...`nspotDL matches; yt-dlp downloads (avoids 403 errors).") $true
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
-        $script:pop.paso.Text = 'Emparejando con YouTube...'
-        [System.Windows.Forms.Application]::DoEvents()
+        $script:pop.paso.Text = (T 'Emparejando con YouTube...' 'Matching on YouTube...')
+        Bombeo-Ui
         $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
         if ($script:ytResueltosSp.Count -eq 0 -and -not $script:popupCancelado) {
-            $script:pop.paso.Text = 'Sin resultados. Reintentando emparejado...'
-            [System.Windows.Forms.Application]::DoEvents()
+            $script:pop.paso.Text = (T 'Sin resultados. Reintentando emparejado...' 'No results. Retrying match...')
+            Bombeo-Ui
             Start-Sleep -Seconds 2
             if (-not $script:popupCancelado) {
                 $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
@@ -2765,7 +3276,7 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     $form.Enabled = $true
 
     if ($script:popupCancelado) {
-        Estado 'Búsqueda de Spotify cancelada.'
+        Estado (T 'Búsqueda de Spotify cancelada.' 'Spotify lookup cancelled.')
         Modo $null
         Barra-Tarea 0
         return
@@ -2773,8 +3284,8 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
 
     $ytUrls = @($script:ytResueltosSp)
     if ($ytUrls.Count -eq 0) {
-        Aviso "No se encontró ninguna canción en YouTube para ese enlace de Spotify.`n`nPrueba otro enlace o más tarde." 'Warning'
-        Estado 'Listo.'
+        Aviso (T "No se encontró ninguna canción en YouTube para ese enlace de Spotify.`n`nPrueba otro enlace o más tarde." "No YouTube match found for that Spotify link.`n`nTry another link or later.") 'Warning'
+        Estado (T 'Listo.' 'Ready.')
         return
     }
 
@@ -2782,35 +3293,20 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     if ($sync) { foreach ($x in $script:listas) { if ($enlaces -contains $x.url) { $porUrl[$x.url] = $x } } }
 
     $built = Construir-Args $ytUrls $sync ''
-    $script:dl = @{
-        nuevas = 0; saltadas = 0; nErrores = 0; errores = New-Object System.Collections.ArrayList
-        actual = 1; total = [Math]::Max($ytUrls.Count, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
-        idsSaltados = New-Object System.Collections.ArrayList
-        sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
-        inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = 'Spotify→YouTube'
-        carpetaEscaneo = $null; motor = 'spotify-yt'
-        completados = New-Object System.Collections.Generic.List[string]
-        indiceUrl = 0
-        drmPendientes = New-Object System.Collections.ArrayList
-        drmMarcados = 0; saltandoDrm = $false; drmFallbackFallo = $false
-        nombreLista = $null; carpetaLista = $null
-    }
+    $script:dl = Nuevo-Estado-Descarga $built $ytUrls.Count 'spotify-yt' $sync $porUrl 'Spotify→YouTube'
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
     $script:ultimosArgsLista = [string[]]@($built.args)
     $script:ultimosArgs = Formato-Args-Informe $script:ultimosArgsLista
 
-    Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
-    $lstResultados.Items.Clear()
-    $lblCalidad.Text = "Spotify → YouTube: $($ytUrls.Count) canción(es) emparejadas. Descargando con yt-dlp."
-    if (-not $script:enMini) { Mostrar-Pestana 1 }
-    Modo 'descarga'
-    Barra-Tarea 1
-    Estado "Spotify: $($ytUrls.Count) encontradas. Descargando..."
+    Arrancar-Ui-Descarga `
+        (T "Spotify: $($ytUrls.Count) encontradas. Descargando..." "Spotify: $($ytUrls.Count) matched. Downloading...") `
+        (T "Spotify → YouTube: $($ytUrls.Count) canción(es) emparejadas. Descargando con yt-dlp." "Spotify → YouTube: $($ytUrls.Count) track(s) matched. Downloading with yt-dlp.")
     Iniciar-Tarea $ytdlp $script:ultimosArgsLista { param($l) Procesar-Linea $l } { param($c) Terminar-Descarga $c } 0 'descarga'
 }
 
 function Encolar-O-Descargar($enlaces, $sync = $false, $indices = '') {
     if (-not (Comprobar-Enlaces $enlaces)) { return }
+    Avisar-Spotify-Si-Hace-Falta $enlaces
     $sp = @($enlaces | Where-Object { (Tipo-Enlace $_) -eq 'spotify' })
     $otros = @($enlaces | Where-Object { (Tipo-Enlace $_) -ne 'spotify' })
 
@@ -2979,7 +3475,7 @@ function Intentar-Saltos-Drm($d) {
 
         Estado ("DRM: buscando alternativa en YouTube ($i/$n):`n$titulo")
         Resultado ([string][char]0x2192 + '  DRM — buscando en YouTube: ' + $titulo)
-        try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        Bombeo-Ui
 
         $query = ($titulo -replace '[\r\n\t]+', ' ').Trim()
         # Quitar restos típicos de path/slug inútil
@@ -3007,13 +3503,12 @@ function Intentar-Saltos-Drm($d) {
             $argsDrm = [string[]]@($built.args)
             $proc = Start-Process -FilePath $ytdlp -ArgumentList $argsDrm -NoNewWindow -PassThru `
                 -RedirectStandardOutput $rS -RedirectStandardError $rE
-            while ($proc -and -not $proc.HasExited) {
-                if ($d.cancelada) {
-                    try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch { Catch-Log 'Intentar-Saltos-Drm' $_ }
-                    break
-                }
-                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
-                Start-Sleep -Milliseconds 40
+            $espera = Esperar-Proceso-Con-Timeout -proc $proc -timeoutSeg 300 -contexto 'Intentar-Saltos-Drm' -siCancelar {
+                [bool]$d.cancelada
+            }
+            if ($espera -eq 'timeout') {
+                $d.drmFallbackFallo = $true
+                Registrar-Error "DRM→YouTube timeout: $titulo"
             }
         } catch {
             Registrar-Error "DRM→YouTube: $($_.Exception.Message)"
@@ -3057,7 +3552,7 @@ function Intentar-Saltos-Drm($d) {
             Estado ("No se pudo saltar el DRM:`n$titulo")
         }
         Poner-Barra-Canciones
-        try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        Bombeo-Ui
     }
 }
 
@@ -3557,11 +4052,13 @@ $timerClip.Start()
 #  Ayuda / Desinstalar / Accesos
 # ================================================================
 function Mostrar-Aviso-Legal-PrimerUso {
-    if ($config.avisoLegalAceptado) { return $true }
+    $rev = 0
+    try { $rev = [int]$config.avisoLegalRevision } catch { $rev = 0 }
+    if ($config.avisoLegalAceptado -and $rev -ge [int]$script:avisoLegalRevisionActual) { return $true }
     $f = New-Object System.Windows.Forms.Form
     Escalar-Dpi $f
-    $f.Text = 'MusicDL — Condiciones de uso'
-    $f.ClientSize = New-Object System.Drawing.Size(560, 420)
+    $f.Text = (T 'MusicDL — Condiciones de uso' 'MusicDL — Terms of use')
+    $f.ClientSize = New-Object System.Drawing.Size(560, 480)
     $f.FormBorderStyle = 'FixedDialog'
     $f.MaximizeBox = $false; $f.MinimizeBox = $false
     $f.StartPosition = 'CenterScreen'
@@ -3571,10 +4068,12 @@ function Mostrar-Aviso-Legal-PrimerUso {
     $t = New-Object System.Windows.Forms.TextBox
     $t.Multiline = $true; $t.ReadOnly = $true; $t.ScrollBars = 'Vertical'
     $t.BorderStyle = 'None'; $t.BackColor = $colPanel; $t.ForeColor = $colTexto
-    $t.TabStop = $false
+    $t.TabStop = $true
+    $t.AccessibleName = (T 'Texto de condiciones de uso' 'Terms of use text')
+    $t.AccessibleRole = [System.Windows.Forms.AccessibleRole]::Document
     $t.Location = New-Object System.Drawing.Point(20, 18)
-    $t.Size = New-Object System.Drawing.Size(520, 320)
-    $t.Text = @"
+    $t.Size = New-Object System.Drawing.Size(520, 380)
+    $t.Text = (T @"
 AVISO LEGAL (uso personal)
 
 MusicDL es una herramienta local. Al continuar confirmas que:
@@ -3582,15 +4081,29 @@ MusicDL es una herramienta local. Al continuar confirmas que:
 1. Respetarás los términos de YouTube, SoundCloud y Spotify y la legislación de tu país sobre derechos de autor.
 2. Usarás el programa solo para uso personal; no redistribuirás, venderás ni compartirás contenido sin permiso.
 3. Entiendes que Spotify no entrega audio Premium: se busca un equivalente en YouTube (calidad variable).
-4. El autor no se hace responsable del uso indebido ni de bloqueos o cambios de las plataformas.
-5. No quitarás el crédito «Made by WLY» / MusicDL al redistribuir el programa.
+4. Si una canción tiene DRM (protección anticopia) y no se puede bajar de la fuente, MusicDL puede buscar la misma en YouTube. No desactiva el DRM de la plataforma; es una búsqueda alternativa. Tú eliges (pestaña AJUSTES) y eres responsable según la ley de tu país y los términos de las plataformas.
+5. El autor no se hace responsable del uso indebido ni de bloqueos o cambios de las plataformas.
+6. No quitarás el crédito «Made by WLY» / MusicDL al redistribuir el programa.
 
-Si no estás de acuerdo, pulsa «No acepto» y el programa se cerrará.
-"@ -replace "(?<!`r)`n", "`r`n"
+Si no estás de acuerdo, pulsa «No acepto» y el programa se cerrará. No se descargarán herramientas.
+"@ @"
+LEGAL NOTICE (personal use)
+
+MusicDL is a local tool. By continuing you confirm that:
+
+1. You will respect YouTube, SoundCloud and Spotify terms and your country's copyright law.
+2. You will use the program for personal use only; you will not redistribute, sell or share content without permission.
+3. You understand Spotify does not provide Premium audio: an equivalent is searched on YouTube (variable quality).
+4. If a track has DRM (copy protection) and cannot be downloaded from the source, MusicDL may search for it on YouTube. This does not disable the platform DRM; it is an alternate search. You choose (SETTINGS tab) and are responsible under your local law and platform terms.
+5. The author is not liable for misuse or for platform blocks or changes.
+6. You will not remove the «Made by WLY» / MusicDL credit when redistributing the program.
+
+If you disagree, press «I do not accept» and the program will close. No tools will be downloaded.
+"@) -replace "(?<!`r)`n", "`r`n"
     $f.Controls.Add($t)
-    $bOk = Nuevo-BotonPrincipal $f 'ACEPTO' 280 360 140 36 $fBotonMed
+    $bOk = Nuevo-BotonPrincipal $f (T 'ACEPTO' 'I ACCEPT') 280 420 140 36 $fBotonMed
     $bOk.DialogResult = 'Yes'
-    $bNo = Nuevo-Boton $f 'No acepto' 140 360 120 36
+    $bNo = Nuevo-Boton $f (T 'No acepto' 'I do not accept') 140 420 120 36
     $bNo.DialogResult = 'No'
     $f.AcceptButton = $bOk
     $f.CancelButton = $bNo
@@ -3598,10 +4111,77 @@ Si no estás de acuerdo, pulsa «No acepto» y el programa se cerrará.
     $f.Dispose()
     if ($r -eq 'Yes') {
         $config.avisoLegalAceptado = $true
+        $config.avisoLegalRevision = [int]$script:avisoLegalRevisionActual
         try { Guardar-Config-Disco } catch { Catch-Log 'AvisoLegal' $_ }
         return $true
     }
     return $false
+}
+
+function Mostrar-Onboarding-PrimerUso {
+    if ($config.onboardingHecho) { return }
+    $f = New-Object System.Windows.Forms.Form
+    Escalar-Dpi $f
+    $f.Text = 'MusicDL — Cómo empezar'
+    $f.ClientSize = New-Object System.Drawing.Size(520, 360)
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false
+    $f.StartPosition = 'CenterScreen'
+    $f.BackColor = $colPanel; $f.ForeColor = $colTexto; $f.Font = $fNormal
+    $f.TopMost = $true
+    if ($script:icono) { $f.Icon = $script:icono }
+
+    $barraTop = New-Object System.Windows.Forms.Panel
+    $barraTop.BackColor = $colAcento
+    $barraTop.Location = New-Object System.Drawing.Point(0, 0)
+    $barraTop.Size = New-Object System.Drawing.Size(520, 4)
+    $f.Controls.Add($barraTop)
+
+    Nueva-Etiqueta $f 'Tres pasos' 24 24 470 28 $fTitulo $colTexto | Out-Null
+    $t = New-Object System.Windows.Forms.TextBox
+    $t.Multiline = $true; $t.ReadOnly = $true; $t.BorderStyle = 'None'
+    $t.BackColor = $colPanel; $t.ForeColor = $colSuave; $t.Font = $fNormal
+    $t.TabStop = $true
+    $t.AccessibleName = (T 'Tutorial de tres pasos' 'Three-step tutorial')
+    $t.AccessibleRole = [System.Windows.Forms.AccessibleRole]::Document
+    $t.Location = New-Object System.Drawing.Point(24, 70)
+    $t.Size = New-Object System.Drawing.Size(470, 210)
+    $t.Text = @"
+1. Abre YouTube, SoundCloud o Spotify y copia el enlace de la canción o lista (Compartir → Copiar enlace).
+
+2. Vuelve aquí y pulsa PEGAR (o Ctrl+V en la caja).
+
+3. Pulsa el botón naranja DESCARGAR.
+
+La música se guarda en «Música descargada» (tu carpeta Música). Puedes cambiarlo con CAMBIAR.
+
+Si necesitas formato, carpetas u otras opciones, pulsa «Más opciones».
+"@ -replace "(?<!`r)`n", "`r`n"
+    $f.Controls.Add($t)
+
+    $b = Nuevo-BotonPrincipal $f 'ENTENDIDO' 340 300 150 36 $fBotonMed
+    $b.DialogResult = 'OK'
+    $f.AcceptButton = $b
+    [void]$f.ShowDialog()
+    $f.Dispose()
+    $config.onboardingHecho = $true
+    try { Guardar-Config-Disco } catch { Catch-Log 'Onboarding' $_ }
+}
+
+function Avisar-Spotify-Si-Hace-Falta($enlaces) {
+    if ($config.avisoSpotifyHecho) { return }
+    $hay = @($enlaces | Where-Object { (Tipo-Enlace $_) -eq 'spotify' })
+    if ($hay.Count -eq 0) { return }
+    Aviso @"
+Sobre Spotify
+
+Spotify no permite bajar el audio Premium.
+MusicDL busca la misma canción en YouTube y descarga esa versión.
+
+La calidad puede variar un poco respecto a Spotify.
+"@
+    $config.avisoSpotifyHecho = $true
+    try { Guardar-Config-Disco } catch { Catch-Log 'AvisoSpotify' $_ }
 }
 
 function Mostrar-Ayuda {
@@ -3617,22 +4197,27 @@ function Mostrar-Ayuda {
     $t = New-Object System.Windows.Forms.TextBox
     $t.Multiline = $true; $t.ReadOnly = $true; $t.ScrollBars = 'Vertical'
     $t.BorderStyle = 'None'; $t.BackColor = $colPanel; $t.ForeColor = $colTexto
-    $t.TabStop = $false
+    $t.TabStop = $true
+    $t.AccessibleName = (T 'Texto de ayuda' 'Help text')
+    $t.AccessibleRole = [System.Windows.Forms.AccessibleRole]::Document
     $t.HideSelection = $true
     $t.Location = New-Object System.Drawing.Point(20, 18)
     $t.Size = New-Object System.Drawing.Size(520, 480)
     $t.Text = @"
 CÓMO DESCARGAR
-1. Copia el enlace de YouTube, SoundCloud o Spotify.
-2. Pégalo aquí (o usa la ventana Mini con "Bajar al copiar").
+1. Copia el enlace de YouTube, SoundCloud o Spotify (Compartir → Copiar enlace).
+2. Pégalo aquí con PEGAR (o Ctrl+V). Varios: uno por línea.
 3. Pulsa Descargar. Si ya está descargando, se añade a la cola.
 
-Spotify: spotDL busca el tema en YouTube; la descarga la hace yt-dlp (misma calidad/fiabilidad que YouTube). Se instalan al abrir el programa la primera vez.
+Por defecto ves el modo simple. Pulsa «Más opciones» para formato, carpetas e historial.
+
+Spotify: no se baja el audio Premium; se busca la misma canción en YouTube y se descarga esa versión (calidad variable). La primera vez te lo avisamos.
 
 FORMATO PARA DJs
 - "Original (sin convertir)" guarda el audio tal cual lo envía la web: es la mejor calidad posible.
 - Con Spotify, "Original" se guarda como M4A sin re-codificar.
 - FLAC/WAV/MP3 320 NO mejoran el sonido de YouTube ni SoundCloud (suelen ser 128–160 kbps).
+- Para uso diario, MP3 (recomendado) es el más compatible.
 
 MIS LISTAS
 Guarda playlists y actualízalas: solo bajan canciones nuevas de ese formato.
@@ -3641,14 +4226,16 @@ Si mueves temas a Rekordbox, marca "No preguntar si faltan canciones...".
 
 SEGURIDAD
 Las actualizaciones del programa deben ir firmadas por el autor. Sin firma válida no se instalan.
-Al arrancar, si hay MusicDL.bat.sig se verifica la firma RSA antes de ejecutar.
-yt-dlp, FFmpeg, Deno y spotDL se descargan con URL fija y se comprueban con SHA256.
+Al arrancar se exige MusicDL.bat.sig y se verifica la firma RSA antes de ejecutar.
+yt-dlp, FFmpeg, Deno y spotDL solo se usan desde %APPDATA%\MusicDL\bin (URL fija + SHA256; sin PATH ni winget).
 Solo se aceptan enlaces https de YouTube, SoundCloud y Spotify.
 La carpeta de destino queda acotada a tu perfil (Música, Documentos, Escritorio, Descargas).
 
 LEGAL
 Uso personal: respeta ToS de las plataformas y la ley de tu país. No redistribuyas contenido sin permiso.
-La primera vez el programa pide aceptar estas condiciones.
+Spotify→YouTube y DRM→YouTube (si lo activas en AJUSTES) son búsquedas alternativas; no desactivan protecciones de la fuente.
+La primera vez (y si cambia el aviso) el programa pide aceptar estas condiciones antes de instalar herramientas.
+Idioma: español o English en AJUSTES.
 
 Si algo falla: menú → Ver detalles técnicos / Ver registro de errores.
 "@ -replace "(?<!`r)`n", "`r`n"
@@ -3693,7 +4280,8 @@ function Terminar-Desinstalacion {
     Aviso "MusicDL se ha desinstalado. Tu música sigue en su carpeta.`n`nSe cerrará y se borrará este archivo."
     $bat = $env:DM_BAT
     if ($bat -and (Test-Path -LiteralPath $bat)) {
-        Start-Process cmd.exe -ArgumentList "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$bat`"" -WindowStyle Hidden
+        $sigDel = $bat + '.sig'
+        Start-Process cmd.exe -ArgumentList "/c ping 127.0.0.1 -n 3 > nul & del /f /q `"$bat`" & if exist `"$sigDel`" del /f /q `"$sigDel`"" -WindowStyle Hidden
     }
     $form.Close(); $formMini.Close()
 }
@@ -3746,13 +4334,14 @@ $btnBorrar.Add_Click({ $txtEnlace.Clear(); $txtEnlace.Focus() })
 $btnCambiar.Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = 'Elige la carpeta donde se guardará la música (perfil, Música, Documentos, Escritorio o Descargas)'
-    if (Test-Path -LiteralPath $txtCarpeta.Text) { $dlg.SelectedPath = $txtCarpeta.Text }
+    $actual = Carpeta-UI-Actual
+    if (Test-Path -LiteralPath $actual) { $dlg.SelectedPath = $actual }
     if ($dlg.ShowDialog($form) -eq 'OK') {
         if (-not (Es-Carpeta-Destino-Segura $dlg.SelectedPath)) {
             Aviso 'Esa carpeta no está permitida. Elige una dentro de tu perfil, Música, Documentos, Escritorio o Descargas.' 'Warning'
             return
         }
-        $txtCarpeta.Text = Normalizar-Carpeta-Destino $dlg.SelectedPath
+        Fijar-Carpeta-UI $dlg.SelectedPath
         Guardar-Config
     }
 })
@@ -3816,9 +4405,15 @@ $btnAbrirUltima.Add_Click({
     }
 })
 $btnAbrir.Add_Click({
-    $c = $txtCarpeta.Text
-    try { New-Item -ItemType Directory -Force -Path $c | Out-Null } catch { Catch-Log 'Cancelar-Operacion' $_ }
+    $c = Carpeta-UI-Actual
+    try { New-Item -ItemType Directory -Force -Path $c | Out-Null } catch { Catch-Log 'Abrir-Carpeta' $_ }
     Start-Process explorer.exe (Q $c)
+})
+
+$lnkMasOpciones.Add_LinkClicked({
+    $config.modoSimple = -not [bool]$config.modoSimple
+    Aplicar-Diseno-Descarga
+    try { Guardar-Config-Disco } catch { Catch-Log 'ModoSimple' $_ }
 })
 
 $btnAyuda.Add_Click({ Mostrar-Ayuda })
@@ -3890,15 +4485,17 @@ $form.Add_Shown({
             $form.Close()
             return
         }
+        $pasoUi = 'onboarding'
+        Mostrar-Onboarding-PrimerUso
         if ($script:hayWin) {
             $pasoUi = 'tema'
-            try { if ($form -and $form.Handle) { [DMWin]::TemaOscuro($form.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($txtEnlace) { [DMWin]::TemaOscuro($txtEnlace.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($txtCarpeta) { [DMWin]::TemaOscuro($txtCarpeta.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($txtNuevaLista) { [DMWin]::TemaOscuro($txtNuevaLista.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($lstResultados) { [DMWin]::TemaOscuro($lstResultados.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($lvListas) { [DMWin]::TemaOscuro($lvListas.Handle) } } catch { Catch-Log 'Cancelar-Operacion' $_ }
-            try { if ($txtNuevaLista) { [DMWin]::Pista($txtNuevaLista.Handle, 'Pega aquí el enlace de una lista') } } catch { Catch-Log 'Cancelar-Operacion' $_ }
+            try { if ($form -and $form.Handle) { [DMWin]::TemaOscuro($form.Handle) } } catch { Catch-Log 'Shown-Tema form' $_ }
+            try { if ($txtEnlace) { [DMWin]::TemaOscuro($txtEnlace.Handle) } } catch { Catch-Log 'Shown-TemaEnlace' $_ }
+            try { if ($txtCarpeta) { [DMWin]::TemaOscuro($txtCarpeta.Handle) } } catch { Catch-Log 'Shown-TemaCarpeta' $_ }
+            try { if ($txtNuevaLista) { [DMWin]::TemaOscuro($txtNuevaLista.Handle) } } catch { Catch-Log 'Shown-TemaNuevaLista' $_ }
+            try { if ($lstResultados) { [DMWin]::TemaOscuro($lstResultados.Handle) } } catch { Catch-Log 'Shown-TemaResultados' $_ }
+            try { if ($lvListas) { [DMWin]::TemaOscuro($lvListas.Handle) } } catch { Catch-Log 'Shown-TemaListas' $_ }
+            try { if ($txtNuevaLista) { [DMWin]::Pista($txtNuevaLista.Handle, (T 'Pega aquí el enlace de una lista' 'Paste a playlist link here')) } } catch { Catch-Log 'Shown-PistaLista' $_ }
         }
         $pasoUi = 'acceso'
         Crear-Acceso
@@ -3908,8 +4505,8 @@ $form.Add_Shown({
         Pintar-Listas
         $pasoUi = 'cola'
         Pintar-Cola
-        try { Refrescar-Path } catch { Catch-Log 'Cancelar-Operacion' $_ }
-        if ($lblAct) { $lblAct.Text = 'Todo listo' }
+        try { Refrescar-Path } catch { Catch-Log 'Shown-RefrescarPath' $_ }
+        if ($lblAct) { $lblAct.Text = (T 'Todo listo' 'Ready') }
 
         if ($script:timerAct) { try { $script:timerAct.Stop(); $script:timerAct.Dispose() } catch {} }
         $script:timerAct = New-Object System.Windows.Forms.Timer
@@ -3917,11 +4514,11 @@ $form.Add_Shown({
         $script:timerAct.Add_Tick({
             try {
                 if ($script:timerAct) { $script:timerAct.Stop() }
-                if ($lblAct) { $lblAct.Text = 'Comprobando descargador...' }
-                [System.Windows.Forms.Application]::DoEvents()
+                if ($lblAct) { $lblAct.Text = (T 'Comprobando descargador...' 'Checking downloader...') }
+                Bombeo-Ui
                 Actualizar-Herramientas-Directas
             } catch {
-                if ($lblAct) { $lblAct.Text = 'Todo al día' }
+                if ($lblAct) { $lblAct.Text = (T 'Todo al día' 'Up to date') }
                 Registrar-Error "Timer actualización: $($_.Exception.Message)"
             }
         })
@@ -3938,9 +4535,10 @@ $form.Add_Shown({
         $script:timerCheckApp.Start()
 
         if ($config -and $config.ventanaMini) { Mostrar-Mini }
+        try { Aplicar-Idioma } catch { Catch-Log 'Shown-AplicarIdioma' $_ }
     } catch {
         Registrar-Error "Al mostrar ventana ($pasoUi): $($_.Exception.Message)"
-        try { if ($lblAct) { $lblAct.Text = 'Listo' } } catch { Catch-Log 'Cancelar-Operacion' $_ }
+        try { if ($lblAct) { $lblAct.Text = (T 'Listo' 'Ready') } } catch { Catch-Log 'Shown-CatchLbl' $_ }
     }
 })
 #endregion Eventos
@@ -3952,17 +4550,19 @@ $form.Add_Shown({
 [System.Windows.Forms.Application]::add_ThreadException({
     param($sender, $e)
     $msg = $e.Exception.Message
-    try { $msg += " | " + $e.Exception.StackTrace } catch { Catch-Log 'Cancelar-Operacion' $_ }
+    try { $msg += " | " + $e.Exception.StackTrace } catch { Catch-Log 'ThreadException' $_ }
     Registrar-Error "UI: $msg"
 })
 [AppDomain]::CurrentDomain.add_UnhandledException({
     param($sender, $e)
-    try { Registrar-Error "Fatal: $($e.ExceptionObject)" } catch { Catch-Log 'Cancelar-Operacion' $_ }
+    try { Registrar-Error "Fatal: $($e.ExceptionObject)" } catch { Catch-Log 'UnhandledException' $_ }
 })
 
 try {
     Crear-Icono
     if ($script:icono) { $form.Icon = $script:icono; $formMini.Icon = $script:icono }
+    # Consentimiento antes de descargar yt-dlp / FFmpeg / Deno / spotDL
+    if (-not (Mostrar-Aviso-Legal-PrimerUso)) { return }
     if (Instalar-Si-Falta) {
         $form.ShowInTaskbar = $true
         Marcar-Arranque-Ok

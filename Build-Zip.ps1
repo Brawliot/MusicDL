@@ -12,8 +12,7 @@ $incluir = @(
     'MusicDL.bat.sig',
     'README.md',
     'LEEME.txt',
-    'clave-publica.xml',
-    'Firmar-Version.ps1'
+    'clave-publica.xml'
 )
 
 foreach ($n in $incluir) {
@@ -40,4 +39,4 @@ try {
 
 Write-Host "ZIP creado: $Salida"
 Write-Host "Contiene: $($incluir -join ', ')"
-Write-Host "No incluye la clave privada."
+Write-Host "No incluye la clave privada ni Firmar-Version.ps1."

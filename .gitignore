@@ -23,4 +23,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
-*~
+*.sig.bak*
+*.bak-ux
+*.sig.bak-ux

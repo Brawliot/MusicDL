@@ -18,6 +18,48 @@ jobs:
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module Pester -MaximumVersion 5.99.99 -Force -SkipPublisherCheck -Scope CurrentUser -AllowClobber
 
+      - name: Verify src assembly
+        shell: pwsh
+        run: |
+          powershell -NoProfile -File .\Assemble-MusicDL.ps1 -Check
+          powershell -NoProfile -File .\Sync-ClavePublica.ps1 -Check
+
+      - name: Verify RSA signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($n in @('MusicDL.bat', 'MusicDL.bat.sig', 'clave-publica.xml')) {
+            if (-not (Test-Path -LiteralPath .\$n)) { throw "Falta $n" }
+          }
+          $pub = Get-Content -LiteralPath .\clave-publica.xml -Raw -Encoding UTF8
+          $tmp = [System.Security.Cryptography.RSA]::Create()
+          $tmp.FromXmlString($pub)
+          $rp = $tmp.ExportParameters($false)
+          $tmp.Dispose()
+          $rsa = New-Object System.Security.Cryptography.RSACng
+          $rsa.ImportParameters($rp)
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path .\MusicDL.bat))
+          $firma = [Convert]::FromBase64String(((Get-Content -LiteralPath .\MusicDL.bat.sig -Raw) -replace '\s', ''))
+          if (-not $rsa.VerifyData(
+              $bytes,
+              $firma,
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+              [System.Security.Cryptography.RSASignaturePadding]::Pss
+          )) {
+            throw 'Firma RSA-PSS inválida para MusicDL.bat (clave-publica.xml)'
+          }
+          $text = [Text.Encoding]::UTF8.GetString($bytes)
+          $mCmd = [regex]::Match($text, 'set "DM_PUB_B64=([^"]+)"')
+          $mPs = [regex]::Match($text, '\$clavePublicaXml = ''([^'']+)''')
+          if (-not $mCmd.Success -or -not $mPs.Success) { throw 'No se pudieron extraer las claves públicas del .bat' }
+          $fromCmd = ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($mCmd.Groups[1].Value)) -replace '\s', '').Trim()
+          $fromPs = ($mPs.Groups[1].Value -replace '\s', '').Trim()
+          $fromFile = ($pub -replace '\s', '').Trim()
+          if ($fromCmd -ne $fromFile -or $fromPs -ne $fromFile) {
+            throw 'Claves públicas desincronizadas (CMD / PS / clave-publica.xml)'
+          }
+          Write-Host 'Firma RSA OK · claves públicas sincronizadas'
+
       - name: Run Pester tests
         shell: pwsh
         run: |
@@ -28,11 +70,3 @@ jobs:
           $cfg.Output.Verbosity = 'Detailed'
           $r = Invoke-Pester -Configuration $cfg
           if ($r.FailedCount -gt 0) { exit 1 }
-
-      - name: Verify bat present
-        shell: pwsh
-        run: |
-          if (-not (Test-Path -LiteralPath .\MusicDL.bat)) { throw 'Falta MusicDL.bat' }
-          if (-not (Test-Path -LiteralPath .\MusicDL.bat.sig)) {
-            Write-Warning 'MusicDL.bat.sig no está en el repo (normal en forks).'
-          }

@@ -1,4 +1,4 @@
-MusicDL v3.36
+MusicDL v3.40
 Made by WLY
 
 Uso
@@ -7,25 +7,49 @@ Uso
 2. Abre MusicDL.bat
 3. Si Windows avisa: Más información → Ejecutar de todas formas
 4. Acepta el aviso legal la primera vez
-5. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL (verás el progreso en MB)
-6. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
+5. Lee los 3 pasos (copiar enlace → pegar → Descargar)
+6. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL (verás el progreso en MB)
+7. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
+
+Por defecto: modo simple (MP3) y destino «Música descargada». Pulsa «Más opciones» para formato y carpetas.
+Spotify: se busca la canción en YouTube (te lo avisa la primera vez).
 
 Solo Windows 10/11. No hace falta Python ni Git.
-Para actualizaciones automáticas, deja MusicDL.bat.sig junto al .bat.
+Para arrancar y actualizar, MusicDL.bat.sig debe estar junto al .bat (firma RSA-PSS obligatoria).
+Idioma: español o English en la pestaña AJUSTES.
 
-Novedades 3.36
+Novedades 3.40
 --------------
-- Aviso legal en el primer uso (se guarda en ajustes)
-- Tests Pester + CI; Build-Zip.ps1 para empaquetar
+- Modo simple: se ve la ruta de destino y el enlace Más opciones
+- Firma RSA-PSS (SHA256); Sync-ClavePublica evita drift CMD/PS
+- Firmar: fingerprint + confirmacion FIRMAR + log en .secrets
+- Rutas criticas con Con-ErrorActionStop; sin .sig.bak-ux
+- Código modular en src/; tests Pester + CI; ZIP sin script de firma
 
-Novedades 3.35
+Novedades 3.39
 --------------
-- DRM → YouTube: usa el título real de la pista (no “Canción N de M”)
+- Desinstalación también borra MusicDL.bat.sig
+- FFmpeg/Deno: SHA256 del exe tras extraer el ZIP
+- Código modular en src/ (Assemble-MusicDL.ps1); más tests de Construir-Args
+
+Novedades 3.38
+--------------
+- Arranque sin TOCTOU: el ScriptBlock usa los mismos bytes firmados
+- Firma: checklist y rechazo si la privada está en el repo; CI verifica .sig
+- Tests de Verificar-Firma y sincronía de claves públicas
+
+Novedades 3.37
+--------------
+- Modo simple por defecto (caja + pegar + descargar)
+- Destino en lenguaje claro; MP3 por defecto en instalaciones nuevas
+- Tutorial de 3 pasos y aviso Spotify→YouTube
+- Idioma ES/EN en AJUSTES; firma obligatoria; ZIP sin script de firma
 
 Aviso legal
 -----------
 Uso personal. Respeta derechos de autor y los términos de YouTube, SoundCloud y Spotify.
 No redistribuyas ni vendas lo descargado sin permiso.
 Spotify no entrega audio Premium (se busca en YouTube).
+Si hay DRM, puede buscar la misma canción en YouTube (AJUSTES); no desactiva el DRM de la fuente.
 El autor no se responsabiliza del uso indebido.
-Al usar MusicDL aceptas estas condiciones (también se muestran la primera vez).
+Al usar MusicDL aceptas estas condiciones (antes de instalar herramientas; también si el aviso se actualiza).
