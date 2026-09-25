@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.10)
+#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.11)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.10'
+$versionApp = '3.11'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -758,7 +758,8 @@ function Mostrar-Popup-Encima($titulo, $texto) {
 
 function Cerrar-Popup {
     $script:popupOcupado = $false
-    if ($script:pop) { $script:pop.form.Close(); $script:pop = $null }
+    if ($script:pop) { try { $script:pop.form.Close() } catch {}; $script:pop = $null }
+    try { if ($form -and -not $form.IsDisposed) { $form.Enabled = $true } } catch {}
 }
 
 function Instalar-Si-Falta {
@@ -1733,6 +1734,11 @@ function Construir-Args($enlaces, $sync, $indices) {
     $a.AddRange([string[]]@('--newline', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
     $a.Add('--concurrent-fragments'); $a.Add('4')
 
+    $ff = Ruta-De 'ffmpeg'
+    if ($ff) { $a.Add('--ffmpeg-location'); $a.Add((Q (Split-Path -Parent $ff))) }
+    $deno = Ruta-De 'deno'
+    if ($deno) { $a.Add('--js-runtimes'); $a.Add((Q ("deno:$deno"))) }
+
     $hayYt = @($enlaces | Where-Object { $_ -match 'youtube\.com|youtu\.be' }).Count -gt 0
     if ($hayYt) {
         $a.Add('--sleep-interval'); $a.Add('1')
@@ -1904,16 +1910,51 @@ function Procesar-Linea-Spotdl($l) {
     }
 }
 
+function Resolver-Spotify-Urls($enlaces) {
+    # spotDL solo empareja Spotify→YouTube; la descarga real la hace yt-dlp (más actualizado).
+    $spotdl = Ruta-De 'spotdl'
+    $ff = Ruta-De 'ffmpeg'
+    if (-not $spotdl) { return @() }
+    $argsList = New-Object System.Collections.Generic.List[string]
+    [void]$argsList.Add('url')
+    foreach ($e in $enlaces) { [void]$argsList.Add([string]$e) }
+    if ($ff) { [void]$argsList.Add('--ffmpeg'); [void]$argsList.Add([string]$ff) }
+
+    $rS = Join-Path $dirApp 'spotdl-url-salida.txt'
+    $rE = Join-Path $dirApp 'spotdl-url-errores.txt'
+    Remove-Item -LiteralPath $rS, $rE -Force -ErrorAction SilentlyContinue
+    try {
+        $p = Start-Process -FilePath $spotdl -ArgumentList $argsList.ToArray() -Wait -NoNewWindow -PassThru `
+            -RedirectStandardOutput $rS -RedirectStandardError $rE
+        $null = $p
+    } catch {
+        Registrar-Error "spotdl url: $($_.Exception.Message)"
+        return @()
+    }
+    $urls = New-Object System.Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $rS) {
+        foreach ($l in (Get-Content -LiteralPath $rS -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+            $t = ([string]$l).Trim()
+            if ($t -match '^https://(www\.)?(music\.)?youtube\.com/' -or $t -match '^https://youtu\.be/') {
+                [void]$urls.Add($t)
+            }
+        }
+    }
+    return @($urls)
+}
+
 function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     $spotdl = Preparar-Spotdl
     if (-not $spotdl) { return }
+    $ytdlp = Preparar-Ytdlp
+    if (-not $ytdlp) { return }
     Refrescar-Path
     if (-not (Ruta-De 'ffmpeg')) {
-        Aviso 'Falta FFmpeg (necesario para spotDL). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
+        Aviso 'Falta FFmpeg. Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
         return
     }
     if (-not (Ruta-De 'deno')) {
-        Aviso 'Falta Deno (necesario para bajar el audio de YouTube vía Spotify). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
+        Aviso 'Falta Deno (necesario para YouTube). Cierra y vuelve a abrir el programa para instalarlo.' 'Warning'
         return
     }
 
@@ -1923,29 +1964,49 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
     }
     Guardar-Config
 
-    $built = Construir-Args-Spotdl $enlaces $sync
+    $script:ytResueltosSp = @()
+    $script:enlacesSpResolve = @($enlaces)
+    $script:pop = Nuevo-Popup 'Spotify' "Buscando las canciones en YouTube...`nspotDL empareja; yt-dlp descarga (evita errores 403)."
+    $script:pop.form.ShowInTaskbar = $true
+    $script:pop.form.Add_Shown({
+        $script:pop.paso.Text = 'Emparejando con YouTube...'
+        [System.Windows.Forms.Application]::DoEvents()
+        $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
+        Start-Sleep -Milliseconds 200
+        Cerrar-Popup
+    })
+    [void]$script:pop.form.ShowDialog()
+
+    $ytUrls = @($script:ytResueltosSp)
+    if ($ytUrls.Count -eq 0) {
+        Aviso "No se encontró ninguna canción en YouTube para ese enlace de Spotify.`n`nPrueba otro enlace o más tarde." 'Warning'
+        Estado 'Listo.'
+        return
+    }
+
     $porUrl = @{}
     if ($sync) { foreach ($x in $script:listas) { if ($enlaces -contains $x.url) { $porUrl[$x.url] = $x } } }
 
+    $built = Construir-Args $ytUrls $sync ''
     $script:dl = @{
         nuevas = 0; saltadas = 0; nErrores = 0; errores = New-Object System.Collections.ArrayList
-        actual = 0; total = [Math]::Max($enlaces.Count, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
+        actual = 1; total = [Math]::Max($ytUrls.Count, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
         idsSaltados = New-Object System.Collections.ArrayList
         sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
         inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = 'Spotify→YouTube'
-        carpetaEscaneo = $null; motor = 'spotdl'
+        carpetaEscaneo = $null; motor = 'spotify-yt'
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
-    $script:ultimosArgs = $built.args
+    $script:ultimosArgs = ($built.args -join ' ')
 
     Set-BarraValor $barra 0; Set-BarraValor $barraMini 0
     $lstResultados.Items.Clear()
-    $lblCalidad.Text = 'Spotify → YouTube (spotDL). La calidad es la del vídeo encontrado.'
+    $lblCalidad.Text = "Spotify → YouTube: $($ytUrls.Count) canción(es) emparejadas. Descargando con yt-dlp."
     if (-not $script:enMini) { Mostrar-Pestana 1 }
     Modo 'descarga'
     Barra-Tarea 1
-    Estado 'Spotify: resolviendo y descargando con spotDL...'
-    Iniciar-Tarea $spotdl $script:ultimosArgs { param($l) Procesar-Linea-Spotdl $l } { param($c) Terminar-Descarga $c } 0 'descarga'
+    Estado "Spotify: $($ytUrls.Count) encontradas. Descargando..."
+    Iniciar-Tarea $ytdlp $script:ultimosArgs { param($l) Procesar-Linea $l } { param($c) Terminar-Descarga $c } 0 'descarga'
 }
 
 function Encolar-O-Descargar($enlaces, $sync = $false, $indices = '') {
@@ -2015,7 +2076,7 @@ function Guardar-Informe($codigo) {
         $txt.Add("Código de salida: $codigo")
         $txt.Add('')
         $txt.Add('Comando:')
-        $prefijo = if ($motor -eq 'spotdl') { 'spotdl ' } else { 'yt-dlp ' }
+        $prefijo = if ($motor -eq 'spotdl' -or $motor -eq 'spotify-yt') { 'spotify→yt-dlp ' } else { 'yt-dlp ' }
         $txt.Add($prefijo + $script:ultimosArgs)
         $txt.Add('')
         $txt.Add('===== Lo que ha ido haciendo =====')
@@ -2075,7 +2136,7 @@ function Terminar-Descarga($codigo) {
         foreach ($u in $d.porUrl.Keys) {
             $x = $d.porUrl[$u]
             $x.ultima = Hoy
-            if ($d.motor -eq 'spotdl') {
+            if ($d.motor -eq 'spotdl' -or $d.motor -eq 'spotify-yt') {
                 $x.nuevas = [string][int]$d.nuevas
             } else {
                 $x.nuevas = [string][int]$d.nuevasPorLista[$u]
@@ -2405,7 +2466,7 @@ CÓMO DESCARGAR
 2. Pégalo aquí (o usa la ventana Mini con "Bajar al copiar").
 3. Pulsa Descargar. Si ya está descargando, se añade a la cola.
 
-Spotify: se descarga con spotDL (se instala al abrir el programa la primera vez, junto a yt-dlp/FFmpeg/Deno). Busca cada canción en YouTube/YouTube Music y la guarda con metadatos de Spotify. La calidad es la del vídeo encontrado, no la de Spotify Premium.
+Spotify: spotDL busca el tema en YouTube; la descarga la hace yt-dlp (misma calidad/fiabilidad que YouTube). Se instalan al abrir el programa la primera vez.
 
 FORMATO PARA DJs
 - "Original (sin convertir)" guarda el audio tal cual lo envía la web: es la mejor calidad posible.
