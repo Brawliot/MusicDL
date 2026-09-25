@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.24)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.25)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.24'
+$versionApp = '3.25'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -646,12 +646,9 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
     $script:downloadCts = $cts
     try {
         if ($script:pop -and $script:pop.paso) {
-            $base = $script:pop.paso.Text
-            if ($base -notmatch 'Conectando|Descargando|Extrayendo|Instalando') {
-                $script:pop.paso.Text = 'Conectando con GitHub...'
-            } else {
-                $script:pop.paso.Text = ($base -replace 'preparando', 'conectando con')
-            }
+            $script:pop.paso.Text = 'Conectando con GitHub...'
+            if ($script:pop.pct) { $script:pop.pct.Text = '' }
+            Poner-Popup-Barra $null
             try { [System.Windows.Forms.Application]::DoEvents() } catch {}
         }
 
@@ -766,10 +763,17 @@ function Instalar-Herramienta-Directa($h) {
             $pct = [int]((100.0 * $leido) / [double]$total)
             if ($pct -gt 100) { $pct = 100 }
             $totMb = [Math]::Round(([double]$total) / 1MB, 1)
-            $script:pop.paso.Text = "Descargando $nombrePieza... $mb / $totMb MB ($pct%)"
+            $script:pop.paso.Text = "Descargando $nombrePieza...`n$mb / $totMb MB"
+            if ($script:pop.pct) { $script:pop.pct.Text = "$pct %" }
+            Poner-Popup-Barra $pct
         } else {
-            $script:pop.paso.Text = "Descargando $nombrePieza... $mb MB"
+            $script:pop.paso.Text = "Descargando $nombrePieza...`n$mb MB (tamaño total desconocido)"
+            if ($script:pop.pct) { $script:pop.pct.Text = "$mb MB" }
+            Poner-Popup-Barra $null
         }
+        try { $script:pop.paso.Refresh() } catch {}
+        try { if ($script:pop.pct) { $script:pop.pct.Refresh() } } catch {}
+        try { if ($script:pop.form) { $script:pop.form.Refresh() } } catch {}
     }
     if (-not (Descargar-Http $url $tmp $progreso)) { return $false }
     try {
@@ -784,6 +788,8 @@ function Instalar-Herramienta-Directa($h) {
         if ($h.tipo -eq 'zip-ffmpeg') {
             if ($script:pop -and $script:pop.paso) {
                 $script:pop.paso.Text = "Extrayendo $($script:dlNombrePieza) (puede tardar)..."
+                if ($script:pop.pct) { $script:pop.pct.Text = '' }
+                Poner-Popup-Barra $null
                 try { [System.Windows.Forms.Application]::DoEvents() } catch {}
             }
             $ok = Extraer-Zip-Selectivo $tmp 'ffmpeg.exe' $destino
@@ -806,12 +812,34 @@ function Instalar-Herramienta-Directa($h) {
     return $false
 }
 
+function Poner-Popup-Barra($pct) {
+    # $null = animación indefinida; 0..100 = progreso real
+    if ($null -eq $pct) {
+        $script:popupBarraPct = $null
+        if ($script:popupAnimFill -and -not $script:popupAnimFill.IsDisposed) {
+            $script:popupAnimFill.Width = 90
+        }
+        return
+    }
+    $v = [double]$pct
+    if ($v -lt 0) { $v = 0 }
+    if ($v -gt 100) { $v = 100 }
+    $script:popupBarraPct = $v
+    if ($script:popupAnimFill -and $script:popupAnimTrack -and -not $script:popupAnimFill.IsDisposed) {
+        $w = [int]($script:popupAnimTrack.Width * $v / 100.0)
+        if ($w -lt 6) { $w = 6 }
+        $script:popupAnimFill.Left = 0
+        $script:popupAnimFill.Width = [Math]::Min($w, $script:popupAnimTrack.Width)
+    }
+}
+
 function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $p = New-Object System.Windows.Forms.Form
     Escalar-Dpi $p
     $p.Text = 'MusicDL'
-    $alto = if ($conCancelar) { 270 } else { 220 }
-    $p.ClientSize = New-Object System.Drawing.Size(500, $alto)
+    $ancho = 560
+    $alto = if ($conCancelar) { 340 } else { 290 }
+    $p.ClientSize = New-Object System.Drawing.Size($ancho, $alto)
     $p.FormBorderStyle = 'FixedDialog'
     $p.ControlBox = $false
     $p.StartPosition = 'CenterScreen'
@@ -823,41 +851,53 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $barraTop = New-Object System.Windows.Forms.Panel
     $barraTop.BackColor = $colAcento
     $barraTop.Location = New-Object System.Drawing.Point(0, 0)
-    $barraTop.Size = New-Object System.Drawing.Size(500, 4)
+    $barraTop.Size = New-Object System.Drawing.Size($ancho, 4)
     $p.Controls.Add($barraTop)
 
     if ($script:bmpIcono) {
         $pic = New-Object System.Windows.Forms.PictureBox
         $pic.Image = $script:bmpIcono
         $pic.SizeMode = 'Zoom'
-        $pic.Location = New-Object System.Drawing.Point(28, 32)
-        $pic.Size = New-Object System.Drawing.Size(48, 48)
+        $pic.Location = New-Object System.Drawing.Point(24, 28)
+        $pic.Size = New-Object System.Drawing.Size(52, 52)
         $p.Controls.Add($pic)
     }
     $l1 = New-Object System.Windows.Forms.Label
     $l1.Text = $titulo; $l1.Font = $fPopup; $l1.ForeColor = $colTexto
-    $l1.Location = New-Object System.Drawing.Point(96, 28); $l1.Size = New-Object System.Drawing.Size(380, 30)
+    $l1.Location = New-Object System.Drawing.Point(92, 28); $l1.Size = New-Object System.Drawing.Size(440, 32)
     $p.Controls.Add($l1)
 
     $l2 = New-Object System.Windows.Forms.Label
     $l2.Text = $texto; $l2.ForeColor = $colSuave
-    $l2.Location = New-Object System.Drawing.Point(96, 62); $l2.Size = New-Object System.Drawing.Size(380, 70)
+    $l2.Location = New-Object System.Drawing.Point(92, 64); $l2.Size = New-Object System.Drawing.Size(440, 56)
     $p.Controls.Add($l2)
 
     $l3 = New-Object System.Windows.Forms.Label
-    $l3.Text = 'Empezando...'; $l3.Font = $fEtiqueta; $l3.ForeColor = $colAcento
-    $l3.Location = New-Object System.Drawing.Point(96, 140); $l3.Size = New-Object System.Drawing.Size(380, 22)
+    $l3.Text = 'Empezando...'
+    $l3.Font = $fNormal
+    $l3.ForeColor = $colAcento
+    $l3.Location = New-Object System.Drawing.Point(24, 140)
+    $l3.Size = New-Object System.Drawing.Size(512, 52)
+    $l3.AutoEllipsis = $false
     $p.Controls.Add($l3)
 
-    # Barra animada propia (la ProgressBar Marquee de Windows se congela con trabajo en UI)
+    $lblPct = New-Object System.Windows.Forms.Label
+    $lblPct.Text = ''
+    $lblPct.Font = $fEtiqueta
+    $lblPct.ForeColor = $colSuave
+    $lblPct.Location = New-Object System.Drawing.Point(24, 196)
+    $lblPct.Size = New-Object System.Drawing.Size(512, 20)
+    $p.Controls.Add($lblPct)
+
+    # Barra: indefinida (va y viene) o porcentaje real (se rellena)
     $track = New-Object System.Windows.Forms.Panel
-    $track.Location = New-Object System.Drawing.Point(96, 170)
-    $track.Size = New-Object System.Drawing.Size(380, 10)
+    $track.Location = New-Object System.Drawing.Point(24, 224)
+    $track.Size = New-Object System.Drawing.Size(512, 16)
     $track.BackColor = $colBorde
     $fill = New-Object System.Windows.Forms.Panel
     $fill.BackColor = $colAcento
     $fill.Location = New-Object System.Drawing.Point(0, 0)
-    $fill.Size = New-Object System.Drawing.Size(90, 10)
+    $fill.Size = New-Object System.Drawing.Size(90, 16)
     $track.Controls.Add($fill)
     $p.Controls.Add($track)
 
@@ -867,11 +907,22 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $script:popupAnimDir = 1
     $script:popupAnimFill = $fill
     $script:popupAnimTrack = $track
+    $script:popupBarraPct = $null
+    $script:popupLblPct = $lblPct
     $anim.Add_Tick({
         if (-not $script:popupAnimFill -or $script:popupAnimFill.IsDisposed) { return }
+        if ($null -ne $script:popupBarraPct) {
+            $w = [int]($script:popupAnimTrack.Width * [double]$script:popupBarraPct / 100.0)
+            if ($w -lt 6) { $w = 6 }
+            $script:popupAnimFill.Left = 0
+            $script:popupAnimFill.Width = [Math]::Min($w, $script:popupAnimTrack.Width)
+            return
+        }
+        # Modo indefinido (conectando / extrayendo)
+        if ($script:popupAnimFill.Width -ne 90) { $script:popupAnimFill.Width = 90 }
         $max = $script:popupAnimTrack.Width - $script:popupAnimFill.Width
         if ($max -lt 1) { return }
-        $script:popupAnimPos += (8 * $script:popupAnimDir)
+        $script:popupAnimPos += (10 * $script:popupAnimDir)
         if ($script:popupAnimPos -ge $max) { $script:popupAnimPos = $max; $script:popupAnimDir = -1 }
         if ($script:popupAnimPos -le 0) { $script:popupAnimPos = 0; $script:popupAnimDir = 1 }
         $script:popupAnimFill.Left = [int]$script:popupAnimPos
@@ -881,11 +932,13 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
         try { $anim.Stop(); $anim.Dispose() } catch {}
         $script:popupAnimFill = $null
         $script:popupAnimTrack = $null
+        $script:popupLblPct = $null
+        $script:popupBarraPct = $null
     })
 
     $btnCancel = $null
     if ($conCancelar) {
-        $btnCancel = Nuevo-Boton $p 'CANCELAR' 180 210 140 36
+        $btnCancel = Nuevo-Boton $p 'CANCELAR' 210 272 140 40
         $btnCancel.Add_Click({
             $script:popupCancelado = $true
             $script:popupOcupado = $false
@@ -900,7 +953,6 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
             if ($script:pop -and $script:pop.paso) {
                 try { $script:pop.paso.Text = 'Cancelando...' } catch {}
             }
-            # Solo cerrar ya si hay proceso externo (Spotify); en instalación la descarga sale sola
             if ($script:popupProc) {
                 try { if ($script:pop) { $script:pop.form.Close() } } catch {}
             }
@@ -909,7 +961,7 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
 
     $script:popupOcupado = $true
     $p.Add_FormClosing({ param($s, $e) if ($script:popupOcupado -and $e.CloseReason -eq 'UserClosing') { $e.Cancel = $true } })
-    return @{ form = $p; paso = $l3; cancelar = $btnCancel; anim = $anim }
+    return @{ form = $p; paso = $l3; pct = $lblPct; cancelar = $btnCancel; anim = $anim }
 }
 
 function Mostrar-Popup-Encima($titulo, $texto) {
@@ -945,6 +997,8 @@ function Instalar-Si-Falta {
             if ($script:popupCancelado) { break }
             $i++
             $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
+            if ($script:pop.pct) { $script:pop.pct.Text = '' }
+            Poner-Popup-Barra $null
             [System.Windows.Forms.Application]::DoEvents()
             $ok = Instalar-Herramienta-Directa $h
             if ($script:popupCancelado) { break }
