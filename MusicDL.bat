@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.16)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.17)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.16'
+$versionApp = '3.17'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -425,14 +425,16 @@ function Archivo-Historial($fmt) {
 # Enlaces: YouTube / SoundCloud / Spotify (descarga Spotify vía spotDL → YouTube)
 function Es-Enlace-Spotify($e) {
     if (-not $e) { return $false }
-    if ($e -match '^https://open\.spotify\.com/(intl-[a-z]{2}/)?(track|album|playlist|artist)/[a-zA-Z0-9]+') { return $true }
-    if ($e -match '^https://spotify\.link/[a-zA-Z0-9]+') { return $true }
+    # (?i) = mayúsculas/minúsculas; admite /embed/, /user/.../playlist/, query ?si=
+    if ($e -match '(?i)^https://open\.spotify\.com/') { return $true }
+    if ($e -match '(?i)^https://(www\.)?spotify\.com/') { return $true }
+    if ($e -match '(?i)^https://spotify\.link/') { return $true }
     return $false
 }
 
 function Tipo-Enlace($e) {
-    if ($e -match '^https://(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/') { return 'youtube' }
-    if ($e -match '^https://(www\.|m\.)?soundcloud\.com/') { return 'soundcloud' }
+    if ($e -match '(?i)^https://(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/') { return 'youtube' }
+    if ($e -match '(?i)^https://(www\.|m\.)?soundcloud\.com/') { return 'soundcloud' }
     if (Es-Enlace-Spotify $e) { return 'spotify' }
     return 'desconocido'
 }
@@ -449,11 +451,14 @@ function Es-Enlace-Valido($e) {
 
 function Parsear-Spotify($e) {
     # Devuelve @{ tipo = track|album|playlist|artist|corto; id = '...' } o $null
-    if ($e -match '^https://spotify\.link/([a-zA-Z0-9]+)') {
+    if ($e -match '(?i)^https://spotify\.link/([a-zA-Z0-9]+)') {
         return @{ tipo = 'corto'; id = $matches[1] }
     }
-    if ($e -match '^https://open\.spotify\.com/(?:intl-[a-z]{2}/)?(track|album|playlist|artist)/([a-zA-Z0-9]+)') {
-        return @{ tipo = $matches[1]; id = $matches[2] }
+    if ($e -match '(?i)^https://open\.spotify\.com/(?:intl-[a-z]{2}/)?(?:embed/)?(track|album|playlist|artist)/([a-zA-Z0-9]+)') {
+        return @{ tipo = $matches[1].ToLower(); id = $matches[2] }
+    }
+    if ($e -match '(?i)^https://open\.spotify\.com/(?:intl-[a-z]{2}/)?user/[^/]+/(playlist)/([a-zA-Z0-9]+)') {
+        return @{ tipo = 'playlist'; id = $matches[2] }
     }
     return $null
 }
@@ -1335,7 +1340,7 @@ $btnDescargar = Nuevo-BotonPrincipal $tab1 'DESCARGAR' 24 434 360 52 $fBoton
 $btnCancelar  = Nuevo-Boton $tab1 'CANCELAR' 400 434 140 52
 $btnCancelar.Enabled = $false
 $btnElegir = Nuevo-Boton $tab1 'ELEGIR…' 556 434 160 52
-$tips.SetToolTip($btnElegir, 'Muestra las canciones de la lista para marcar solo las que quieras')
+$tips.SetToolTip($btnElegir, 'YouTube/SoundCloud: elige canciones de la lista. Spotify: usa Descargar (no admite elección una a una).')
 $tips.SetToolTip($btnDescargar, 'Si ya hay una descarga, el enlace se añade a la cola')
 
 $lblCola = Nueva-Etiqueta $tab1 '' 24 500 690 20 $fPequena $colSuave
@@ -1638,7 +1643,7 @@ function Traducir-Error($l) {
     $web = if ($l -match '\[youtube') { 'YouTube' } elseif ($l -match '\[soundcloud') { 'SoundCloud' } else { 'La web' }
     switch -Regex ($l) {
         'Unsupported URL|is not a valid URL|no suitable extractor' {
-            return @{ origen = 'El enlace'; texto = 'No es de una canción ni de una lista de YouTube o SoundCloud.' } }
+            return @{ origen = 'El enlace'; texto = 'No es de una canción ni de una lista de YouTube, SoundCloud o Spotify.' } }
         'getaddrinfo|Failed to resolve|timed out|Connection refused|No route to host|Network is unreachable|Connection reset|RemoteDisconnected' {
             return @{ origen = 'Tu conexión'; texto = 'No hay internet o va muy lenta. Comprueba la conexión y vuelve a intentarlo.' } }
         'DRM protected|DRM-protected' {
@@ -2424,8 +2429,8 @@ function Elegir-Canciones {
     $enlaces = Leer-Enlaces
     if (-not (Comprobar-Enlaces $enlaces)) { return }
     if ($enlaces.Count -gt 1) { Aviso 'Para elegir canciones, deja un solo enlace de lista.'; return }
-    if ((Tipo-Enlace $enlaces[0]) -eq 'spotify') {
-        Aviso "Con Spotify no se puede elegir canción a canción.`n`nPulsa Descargar: spotDL bajará la pista, el álbum o la playlist completa (buscando cada tema en YouTube)."
+    if ((Tipo-Enlace $enlaces[0]) -eq 'spotify' -or $enlaces[0] -match '(?i)spotify') {
+        Aviso "Con Spotify no se puede elegir canción a canción.`n`nPulsa Descargar: se emparejará la playlist/álbum completa en YouTube y se bajará."
         return
     }
     $ytdlp = Preparar-Ytdlp
