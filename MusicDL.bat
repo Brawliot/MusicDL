@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.23)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.24)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.23'
+$versionApp = '3.24'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -638,12 +638,33 @@ $timer.Add_Tick({
 #  Descarga directa de herramientas (sin depender de winget)
 # ================================================================
 function Descargar-Http($url, $destino, $alProgreso = $null) {
-    # Descarga por streaming para no congelar la UI y poder mostrar progreso.
+    # Streaming + espera con DoEvents para no congelar el popup (sobre todo al conectar).
     $cliente = New-Object System.Net.Http.HttpClient
-    $cliente.Timeout = [TimeSpan]::FromMinutes(20)
-    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.23')
+    $cliente.Timeout = [TimeSpan]::FromMinutes(5)
+    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.24')
+    $cts = New-Object System.Threading.CancellationTokenSource
+    $script:downloadCts = $cts
     try {
-        $resp = $cliente.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        if ($script:pop -and $script:pop.paso) {
+            $base = $script:pop.paso.Text
+            if ($base -notmatch 'Conectando|Descargando|Extrayendo|Instalando') {
+                $script:pop.paso.Text = 'Conectando con GitHub...'
+            } else {
+                $script:pop.paso.Text = ($base -replace 'preparando', 'conectando con')
+            }
+            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        }
+
+        $task = $cliente.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token)
+        while (-not $task.IsCompleted) {
+            if ($script:popupCancelado) { try { $cts.Cancel() } catch {}; return $false }
+            try { [void]$task.Wait(200) } catch { break }
+            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        }
+        if ($script:popupCancelado) { return $false }
+        if ($task.IsCanceled) { return $false }
+        if ($task.IsFaulted) { throw $task.Exception.GetBaseException() }
+        $resp = $task.Result
         [void]$resp.EnsureSuccessStatusCode()
         $total = $resp.Content.Headers.ContentLength
         $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
@@ -652,7 +673,18 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
             $buf = New-Object byte[] 131072
             $leido = [long]0
             $ultimoUi = [datetime]::MinValue
-            while (($n = $stream.Read($buf, 0, $buf.Length)) -gt 0) {
+            while ($true) {
+                if ($script:popupCancelado) { try { $cts.Cancel() } catch {}; return $false }
+                $readTask = $stream.ReadAsync($buf, 0, $buf.Length, $cts.Token)
+                while (-not $readTask.IsCompleted) {
+                    if ($script:popupCancelado) { try { $cts.Cancel() } catch {}; return $false }
+                    try { [void]$readTask.Wait(200) } catch { break }
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                }
+                if ($readTask.IsCanceled) { return $false }
+                if ($readTask.IsFaulted) { throw $readTask.Exception.GetBaseException() }
+                $n = [int]$readTask.Result
+                if ($n -le 0) { break }
                 $fs.Write($buf, 0, $n)
                 $leido += $n
                 $ahora = Get-Date
@@ -668,12 +700,22 @@ function Descargar-Http($url, $destino, $alProgreso = $null) {
             try { $stream.Dispose() } catch {}
             try { $resp.Dispose() } catch {}
         }
+        if ($script:popupCancelado) {
+            try { Remove-Item -LiteralPath $destino -Force -ErrorAction SilentlyContinue } catch {}
+            return $false
+        }
         return $true
     } catch {
-        Registrar-Error "Descarga $url : $($_.Exception.Message)"
+        if (-not $script:popupCancelado) {
+            Registrar-Error "Descarga $url : $($_.Exception.Message)"
+        }
         try { Remove-Item -LiteralPath $destino -Force -ErrorAction SilentlyContinue } catch {}
         return $false
-    } finally { $cliente.Dispose() }
+    } finally {
+        $script:downloadCts = $null
+        try { $cts.Dispose() } catch {}
+        $cliente.Dispose()
+    }
 }
 
 function Extraer-Zip-Selectivo($zipPath, $patronExe, $destinoExe) {
@@ -847,6 +889,9 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
         $btnCancel.Add_Click({
             $script:popupCancelado = $true
             $script:popupOcupado = $false
+            if ($script:downloadCts) {
+                try { $script:downloadCts.Cancel() } catch {}
+            }
             if ($script:popupProc -and -not $script:popupProc.HasExited) {
                 try {
                     Start-Process taskkill -ArgumentList "/PID $($script:popupProc.Id) /T /F" -WindowStyle Hidden -Wait
@@ -855,7 +900,10 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
             if ($script:pop -and $script:pop.paso) {
                 try { $script:pop.paso.Text = 'Cancelando...' } catch {}
             }
-            try { if ($script:pop) { $script:pop.form.Close() } } catch {}
+            # Solo cerrar ya si hay proceso externo (Spotify); en instalación la descarga sale sola
+            if ($script:popupProc) {
+                try { if ($script:pop) { $script:pop.form.Close() } } catch {}
+            }
         })
     }
 
@@ -886,17 +934,20 @@ function Instalar-Si-Falta {
     $falta = Faltan
     if ($falta.Count -eq 0) { return $true }
 
-    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet de forma directa.`nFFmpeg es grande (~100 MB): verás el progreso en MB. No cierres esta ventana."
+    $script:popupCancelado = $false
+    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet.`nFFmpeg ~100 MB: verás el progreso. Puedes pulsar CANCELAR." $true
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
         $i = 0
         $todas = @(Faltan)
         $totalPasos = [Math]::Max($todas.Count, 1)
         foreach ($h in $todas) {
+            if ($script:popupCancelado) { break }
             $i++
-            $script:pop.paso.Text = "Paso $i de $totalPasos : preparando $($h.nombre)..."
+            $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
             [System.Windows.Forms.Application]::DoEvents()
             $ok = Instalar-Herramienta-Directa $h
+            if ($script:popupCancelado) { break }
             if (-not $ok) {
                 # Respaldo winget si existe
                 $wg = Ruta-De 'winget'
@@ -916,10 +967,16 @@ function Instalar-Si-Falta {
     [void]$script:pop.form.ShowDialog()
 
     Refrescar-Path
+    if ($script:popupCancelado) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Instalación cancelada.`n`nVuelve a abrir MusicDL cuando tengas internet (hace falta llegar a GitHub).",
+            'MusicDL', 'OK', 'Information') | Out-Null
+        return $false
+    }
     $falta = Faltan
     if ($falta.Count -gt 0) {
         [System.Windows.Forms.MessageBox]::Show(
-            "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet y vuelve a abrir el programa.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.",
+            "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet (GitHub) y el antivirus.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.`n`nDetalle en: %APPDATA%\MusicDL\errores.log",
             'MusicDL', 'OK', 'Warning') | Out-Null
         return $false
     }

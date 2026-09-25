@@ -9,7 +9,7 @@ Descarga música desde **YouTube**, **SoundCloud** y **Spotify** en Windows.
 - Actualizaciones **firmadas RSA**
 - Si hay DRM: puede buscar la canción en YouTube (pestaña **AJUSTES**)
 
-**Versión actual:** 3.23 · **Made by WLY**
+**Versión actual:** 3.24 · **Made by WLY**
 
 ---
 
