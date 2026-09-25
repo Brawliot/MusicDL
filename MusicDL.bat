@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.15)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.16)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.15'
+$versionApp = '3.16'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -740,11 +740,39 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $l3.Location = New-Object System.Drawing.Point(96, 140); $l3.Size = New-Object System.Drawing.Size(380, 22)
     $p.Controls.Add($l3)
 
-    $pb = New-Object System.Windows.Forms.ProgressBar
-    $pb.Style = 'Marquee'
-    $pb.MarqueeAnimationSpeed = 30
-    $pb.Location = New-Object System.Drawing.Point(96, 170); $pb.Size = New-Object System.Drawing.Size(380, 10)
-    $p.Controls.Add($pb)
+    # Barra animada propia (la ProgressBar Marquee de Windows se congela con trabajo en UI)
+    $track = New-Object System.Windows.Forms.Panel
+    $track.Location = New-Object System.Drawing.Point(96, 170)
+    $track.Size = New-Object System.Drawing.Size(380, 10)
+    $track.BackColor = $colBorde
+    $fill = New-Object System.Windows.Forms.Panel
+    $fill.BackColor = $colAcento
+    $fill.Location = New-Object System.Drawing.Point(0, 0)
+    $fill.Size = New-Object System.Drawing.Size(90, 10)
+    $track.Controls.Add($fill)
+    $p.Controls.Add($track)
+
+    $anim = New-Object System.Windows.Forms.Timer
+    $anim.Interval = 40
+    $script:popupAnimPos = 0
+    $script:popupAnimDir = 1
+    $script:popupAnimFill = $fill
+    $script:popupAnimTrack = $track
+    $anim.Add_Tick({
+        if (-not $script:popupAnimFill -or $script:popupAnimFill.IsDisposed) { return }
+        $max = $script:popupAnimTrack.Width - $script:popupAnimFill.Width
+        if ($max -lt 1) { return }
+        $script:popupAnimPos += (8 * $script:popupAnimDir)
+        if ($script:popupAnimPos -ge $max) { $script:popupAnimPos = $max; $script:popupAnimDir = -1 }
+        if ($script:popupAnimPos -le 0) { $script:popupAnimPos = 0; $script:popupAnimDir = 1 }
+        $script:popupAnimFill.Left = [int]$script:popupAnimPos
+    })
+    $p.Add_Shown({ $anim.Start() })
+    $p.Add_FormClosed({
+        try { $anim.Stop(); $anim.Dispose() } catch {}
+        $script:popupAnimFill = $null
+        $script:popupAnimTrack = $null
+    })
 
     $btnCancel = $null
     if ($conCancelar) {
@@ -766,7 +794,7 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
 
     $script:popupOcupado = $true
     $p.Add_FormClosing({ param($s, $e) if ($script:popupOcupado -and $e.CloseReason -eq 'UserClosing') { $e.Cancel = $true } })
-    return @{ form = $p; paso = $l3; cancelar = $btnCancel }
+    return @{ form = $p; paso = $l3; cancelar = $btnCancel; anim = $anim }
 }
 
 function Mostrar-Popup-Encima($titulo, $texto) {
@@ -2039,7 +2067,7 @@ function Resolver-Spotify-Urls($enlaces) {
                 break
             }
             [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 120
+            Start-Sleep -Milliseconds 40
         }
     } catch {
         Registrar-Error "spotdl url: $($_.Exception.Message)"
