@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.25)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.26)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.25'
+$versionApp = '3.26'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -837,8 +837,8 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $p = New-Object System.Windows.Forms.Form
     Escalar-Dpi $p
     $p.Text = 'MusicDL'
-    $ancho = 560
-    $alto = if ($conCancelar) { 340 } else { 290 }
+    $ancho = 580
+    $alto = if ($conCancelar) { 390 } else { 330 }
     $p.ClientSize = New-Object System.Drawing.Size($ancho, $alto)
     $p.FormBorderStyle = 'FixedDialog'
     $p.ControlBox = $false
@@ -858,26 +858,31 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
         $pic = New-Object System.Windows.Forms.PictureBox
         $pic.Image = $script:bmpIcono
         $pic.SizeMode = 'Zoom'
-        $pic.Location = New-Object System.Drawing.Point(24, 28)
-        $pic.Size = New-Object System.Drawing.Size(52, 52)
+        $pic.Location = New-Object System.Drawing.Point(24, 22)
+        $pic.Size = New-Object System.Drawing.Size(48, 48)
         $p.Controls.Add($pic)
     }
     $l1 = New-Object System.Windows.Forms.Label
     $l1.Text = $titulo; $l1.Font = $fPopup; $l1.ForeColor = $colTexto
-    $l1.Location = New-Object System.Drawing.Point(92, 28); $l1.Size = New-Object System.Drawing.Size(440, 32)
+    $l1.Location = New-Object System.Drawing.Point(88, 28); $l1.Size = New-Object System.Drawing.Size(460, 36)
     $p.Controls.Add($l1)
 
+    # Texto de explicación (completo, sin solaparse con el progreso)
     $l2 = New-Object System.Windows.Forms.Label
-    $l2.Text = $texto; $l2.ForeColor = $colSuave
-    $l2.Location = New-Object System.Drawing.Point(92, 64); $l2.Size = New-Object System.Drawing.Size(440, 56)
+    $l2.Text = $texto
+    $l2.ForeColor = $colSuave
+    $l2.Font = $fPequena
+    $l2.Location = New-Object System.Drawing.Point(24, 82)
+    $l2.Size = New-Object System.Drawing.Size(532, 70)
     $p.Controls.Add($l2)
 
+    # Estado / progreso (más abajo)
     $l3 = New-Object System.Windows.Forms.Label
     $l3.Text = 'Empezando...'
     $l3.Font = $fNormal
     $l3.ForeColor = $colAcento
-    $l3.Location = New-Object System.Drawing.Point(24, 140)
-    $l3.Size = New-Object System.Drawing.Size(512, 52)
+    $l3.Location = New-Object System.Drawing.Point(24, 168)
+    $l3.Size = New-Object System.Drawing.Size(532, 56)
     $l3.AutoEllipsis = $false
     $p.Controls.Add($l3)
 
@@ -885,19 +890,19 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $lblPct.Text = ''
     $lblPct.Font = $fEtiqueta
     $lblPct.ForeColor = $colSuave
-    $lblPct.Location = New-Object System.Drawing.Point(24, 196)
-    $lblPct.Size = New-Object System.Drawing.Size(512, 20)
+    $lblPct.TextAlign = 'MiddleRight'
+    $lblPct.Location = New-Object System.Drawing.Point(24, 228)
+    $lblPct.Size = New-Object System.Drawing.Size(532, 22)
     $p.Controls.Add($lblPct)
 
-    # Barra: indefinida (va y viene) o porcentaje real (se rellena)
     $track = New-Object System.Windows.Forms.Panel
-    $track.Location = New-Object System.Drawing.Point(24, 224)
-    $track.Size = New-Object System.Drawing.Size(512, 16)
+    $track.Location = New-Object System.Drawing.Point(24, 256)
+    $track.Size = New-Object System.Drawing.Size(532, 18)
     $track.BackColor = $colBorde
     $fill = New-Object System.Windows.Forms.Panel
     $fill.BackColor = $colAcento
     $fill.Location = New-Object System.Drawing.Point(0, 0)
-    $fill.Size = New-Object System.Drawing.Size(90, 16)
+    $fill.Size = New-Object System.Drawing.Size(90, 18)
     $track.Controls.Add($fill)
     $p.Controls.Add($track)
 
@@ -918,7 +923,6 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
             $script:popupAnimFill.Width = [Math]::Min($w, $script:popupAnimTrack.Width)
             return
         }
-        # Modo indefinido (conectando / extrayendo)
         if ($script:popupAnimFill.Width -ne 90) { $script:popupAnimFill.Width = 90 }
         $max = $script:popupAnimTrack.Width - $script:popupAnimFill.Width
         if ($max -lt 1) { return }
@@ -938,7 +942,7 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
 
     $btnCancel = $null
     if ($conCancelar) {
-        $btnCancel = Nuevo-Boton $p 'CANCELAR' 210 272 140 40
+        $btnCancel = Nuevo-Boton $p 'CANCELAR' 220 318 140 40
         $btnCancel.Add_Click({
             $script:popupCancelado = $true
             $script:popupOcupado = $false
@@ -987,7 +991,7 @@ function Instalar-Si-Falta {
     if ($falta.Count -eq 0) { return $true }
 
     $script:popupCancelado = $false
-    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet.`nFFmpeg ~100 MB: verás el progreso. Puedes pulsar CANCELAR." $true
+    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Primera vez: se descargan yt-dlp, FFmpeg, Deno y spotDL desde internet.`nFFmpeg ocupa ~100 MB. Verás el progreso abajo. Puedes pulsar CANCELAR." $true
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
         $i = 0
