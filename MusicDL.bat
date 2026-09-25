@@ -6,7 +6,7 @@ REM  Este .bat solo arranca PowerShell para mostrar la ventana.
 REM  Codigo fuente completo debajo; sin ofuscacion.
 REM ================================================================
 set "DM_BAT=%~f0"
-set "DM_DIR=%APPDATA%\DescargarMusica"
+set "DM_DIR=%APPDATA%\MusicDL"
 if not exist "%DM_DIR%" mkdir "%DM_DIR%" >nul 2>&1
 
 REM Si una actualizacion anterior no llego a arrancar, restaurar la version previa
@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  Descargar música  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.11)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.12)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.11'
+$versionApp = '3.12'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -50,7 +50,7 @@ Add-Type -AssemblyName System.Net.Http
 $script:mutex = $null
 try {
     $created = $false
-    $script:mutex = New-Object System.Threading.Mutex($true, 'Global\DescargarMusica.SingleInstance', [ref]$created)
+    $script:mutex = New-Object System.Threading.Mutex($true, 'Global\MusicDL.SingleInstance', [ref]$created)
     if (-not $created) {
         Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices;
@@ -65,7 +65,7 @@ public static class DMBring {
             var sb = new System.Text.StringBuilder(256);
             GetWindowText(h, sb, 256);
             string t = sb.ToString();
-            if (t == "Descargar música" || t == "Descargar música (mini)") {
+            if (t == "MusicDL" || t == "MusicDL (mini)" || t == "Descargar música" || t == "Descargar música (mini)") {
                 ShowWindow(h, 9); SetForegroundWindow(h); return false;
             }
             return true;
@@ -75,8 +75,8 @@ public static class DMBring {
 "@
         try { [DMBring]::FocusApp() } catch {}
         [System.Windows.Forms.MessageBox]::Show(
-            'Descargar música ya está abierto. Se ha traído esa ventana al frente.',
-            'Descargar música', 'OK', 'Information') | Out-Null
+            'MusicDL ya está abierto. Se ha traído esa ventana al frente.',
+            'MusicDL', 'OK', 'Information') | Out-Null
         exit
     }
 } catch {}
@@ -179,7 +179,7 @@ public static class DMWin {
 }
 "@
     [void][DMWin]::SetProcessDPIAware()
-    [void][DMWin]::SetCurrentProcessExplicitAppUserModelID('DescargarMusica.App')
+    [void][DMWin]::SetCurrentProcessExplicitAppUserModelID('MusicDL.App')
     $script:hayWin = $true
 } catch { $script:hayWin = $false }
 
@@ -188,7 +188,12 @@ public static class DMWin {
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 # ---------- Rutas y ajustes ----------
-$dirApp        = Join-Path $env:APPDATA 'DescargarMusica'
+$dirApp        = Join-Path $env:APPDATA 'MusicDL'
+$dirAppViejo   = Join-Path $env:APPDATA 'DescargarMusica'
+if ((Test-Path -LiteralPath $dirAppViejo) -and -not (Test-Path -LiteralPath $dirApp)) {
+    try { Move-Item -LiteralPath $dirAppViejo -Destination $dirApp -Force } catch {}
+}
+
 $dirBin        = Join-Path $dirApp 'bin'
 New-Item -ItemType Directory -Force -Path $dirApp, $dirBin | Out-Null
 $archConfig    = Join-Path $dirApp 'config.json'
@@ -368,7 +373,7 @@ function Url-Spotdl-Windows {
     try {
         $cli = New-Object System.Net.Http.HttpClient
         $cli.Timeout = [TimeSpan]::FromSeconds(25)
-        $cli.DefaultRequestHeaders.UserAgent.ParseAdd('DescargarMusica/3.6')
+        $cli.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.11')
         $json = $cli.GetStringAsync('https://api.github.com/repos/spotDL/spotify-downloader/releases/latest').GetAwaiter().GetResult()
         $cli.Dispose()
         $rel = $json | ConvertFrom-Json
@@ -626,7 +631,7 @@ $timer.Add_Tick({
 function Descargar-Http($url, $destino) {
     $cliente = New-Object System.Net.Http.HttpClient
     $cliente.Timeout = [TimeSpan]::FromMinutes(15)
-    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('DescargarMusica/3.0')
+    $cliente.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.11')
     try {
         $bytes = $cliente.GetByteArrayAsync($url).GetAwaiter().GetResult()
         [IO.File]::WriteAllBytes($destino, $bytes)
@@ -695,7 +700,7 @@ function Instalar-Herramienta-Directa($h) {
 function Nuevo-Popup($titulo, $texto) {
     $p = New-Object System.Windows.Forms.Form
     Escalar-Dpi $p
-    $p.Text = 'Descargar música'
+    $p.Text = 'MusicDL'
     $p.ClientSize = New-Object System.Drawing.Size(500, 220)
     $p.FormBorderStyle = 'FixedDialog'
     $p.ControlBox = $false
@@ -767,7 +772,7 @@ function Instalar-Si-Falta {
     $falta = Faltan
     if ($falta.Count -eq 0) { return $true }
 
-    $script:pop = Nuevo-Popup 'Preparando Descargar música' "Es la primera vez (o faltan piezas). Se descargarán desde internet de forma directa.`nPuede tardar unos minutos. No cierres esta ventana."
+    $script:pop = Nuevo-Popup 'Preparando MusicDL' "Es la primera vez (o faltan piezas). Se descargarán desde internet de forma directa.`nPuede tardar unos minutos. No cierres esta ventana."
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
         $i = 0
@@ -799,7 +804,7 @@ function Instalar-Si-Falta {
     if ($falta.Count -gt 0) {
         [System.Windows.Forms.MessageBox]::Show(
             "No se pudo instalar $($falta[0].nombre).`n`nComprueba internet y vuelve a abrir el programa.`nSi tu PC de empresa bloquea descargas, pide a informática que permita yt-dlp, FFmpeg, Deno y spotDL.",
-            'Descargar música', 'OK', 'Warning') | Out-Null
+            'MusicDL', 'OK', 'Warning') | Out-Null
         return $false
     }
     return $true
@@ -1147,7 +1152,7 @@ function Nuevo-ListBoxOscuro($padre, $x, $y, $ancho, $alto) {
 # ================================================================
 $form = New-Object System.Windows.Forms.Form
 Escalar-Dpi $form
-$form.Text = 'Descargar música'
+$form.Text = 'MusicDL'
 $form.ClientSize = New-Object System.Drawing.Size(780, 1000)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedSingle'
@@ -1167,7 +1172,7 @@ $hdrBar.Location = New-Object System.Drawing.Point(0, 0)
 $hdrBar.Size = New-Object System.Drawing.Size(780, 3)
 $form.Controls.Add($hdrBar)
 
-Nueva-Etiqueta $form 'DESCARGAR MÚSICA' 28 18 480 34 $fTitulo $colTexto | Out-Null
+Nueva-Etiqueta $form 'MusicDL' 28 18 480 34 $fTitulo $colTexto | Out-Null
 Nueva-Etiqueta $form 'YouTube  ·  SoundCloud  ·  Spotify' 30 54 400 20 $fPequena $colSuave | Out-Null
 $lblSello = Nueva-Etiqueta $form 'Made by WLY' 430 54 150 20 $fPequena $colTenue
 $lblSello.TextAlign = 'MiddleRight'
@@ -1344,7 +1349,7 @@ $miDetalles    = $menu.Items.Add('Ver detalles técnicos de la última descarga'
 $miErrores     = $menu.Items.Add('Ver registro de errores internos')
 $miActApp      = $menu.Items.Add('Buscar una versión nueva del programa')
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$miDesinstalar = $menu.Items.Add('Desinstalar Descargar música...')
+$miDesinstalar = $menu.Items.Add('Desinstalar MusicDL...')
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miVersion     = $menu.Items.Add("Versión $versionApp")
 $miVersion.Enabled = $false
@@ -1354,7 +1359,7 @@ $miVersion.Enabled = $false
 # ================================================================
 $formMini = New-Object System.Windows.Forms.Form
 Escalar-Dpi $formMini
-$formMini.Text = 'Descargar música (mini)'
+$formMini.Text = 'MusicDL (mini)'
 $formMini.ClientSize = New-Object System.Drawing.Size(460, 320)
 $formMini.FormBorderStyle = 'FixedSingle'
 $formMini.MaximizeBox = $false
@@ -1370,7 +1375,7 @@ $miniBar.Dock = 'Top'
 $miniBar.Height = 3
 $formMini.Controls.Add($miniBar)
 
-Nueva-Etiqueta $formMini 'DESCARGAR MÚSICA' 18 18 300 28 $fMiniTit $colTexto | Out-Null
+Nueva-Etiqueta $formMini 'MusicDL' 18 18 300 28 $fMiniTit $colTexto | Out-Null
 $btnExpandir = Nuevo-Boton $formMini 'GRANDE' 350 16 90 30
 $chkBajarCopiar = Nueva-Casilla $formMini 'Bajar al copiar enlace (YouTube, SoundCloud o Spotify)' 18 56 $config.bajarAlCopiar 420
 $txtMini = Nuevo-Campo $formMini 18 94 320 34 $false
@@ -1391,11 +1396,11 @@ function Estado($texto) {
 }
 function Aviso($texto, $icono = 'Information') {
     $owner = if ($script:enMini) { $formMini } else { $form }
-    [System.Windows.Forms.MessageBox]::Show($owner, $texto, 'Descargar música', 'OK', $icono) | Out-Null
+    [System.Windows.Forms.MessageBox]::Show($owner, $texto, 'MusicDL', 'OK', $icono) | Out-Null
 }
 function Pregunta($texto) {
     $owner = if ($script:enMini) { $formMini } else { $form }
-    return ([System.Windows.Forms.MessageBox]::Show($owner, $texto, 'Descargar música', 'YesNo', 'Question') -eq 'Yes')
+    return ([System.Windows.Forms.MessageBox]::Show($owner, $texto, 'MusicDL', 'YesNo', 'Question') -eq 'Yes')
 }
 function Resultado($texto) {
     [void]$lstResultados.Items.Add($texto)
@@ -1505,7 +1510,7 @@ function Comprobar-App($manual = $false) {
     try {
         $script:http = New-Object System.Net.Http.HttpClient
         $script:http.Timeout = [TimeSpan]::FromSeconds(30)
-        $script:http.DefaultRequestHeaders.UserAgent.ParseAdd('DescargarMusica/3.0')
+        $script:http.DefaultRequestHeaders.UserAgent.ParseAdd('MusicDL/3.11')
         $script:tareaApp = $script:http.GetByteArrayAsync($urlApp + '?v=' + [DateTime]::Now.Ticks)
         $script:firmaUrl = if ($urlFirma) { $urlFirma } else { $urlApp + '.sig' }
         $script:tareaFirma = $script:http.GetStringAsync($script:firmaUrl + '?v=' + [DateTime]::Now.Ticks)
@@ -1551,7 +1556,7 @@ $timerApp.Add_Tick({
         return
     }
     if ($script:modo -ne $null -and -not $script:checkManual) { return }
-    if (-not (Pregunta "Hay una versión nueva de Descargar música ($nueva), firmada por el autor. Tú tienes la $versionApp.`n`n¿Actualizar ahora?")) { return }
+    if (-not (Pregunta "Hay una versión nueva de MusicDL ($nueva), firmada por el autor. Tú tienes la $versionApp.`n`n¿Actualizar ahora?")) { return }
     Instalar-VersionApp $texto
 })
 
@@ -2227,7 +2232,7 @@ function Ofrecer-Rebajar($d) {
     $r = [System.Windows.Forms.MessageBox]::Show(
         $(if ($script:enMini) { $formMini } else { $form }),
         "Se han saltado $(Plural $n 'canción' 'canciones') porque ya las descargaste en este formato, pero no están en la carpeta de esta descarga.`n`nSí = volver a descargarlas`nNo = dejarlas saltadas`nCancelar = no volver a preguntar (útil si las moviste a Rekordbox)",
-        'Descargar música', 'YesNoCancel', 'Question')
+        'MusicDL', 'YesNoCancel', 'Question')
     if ($r -eq 'Cancel') {
         $chkNoPreguntar.Checked = $true
         $config.noPreguntarBorradas = $true
@@ -2446,7 +2451,7 @@ $timerClip.Start()
 function Mostrar-Ayuda {
     $f = New-Object System.Windows.Forms.Form
     Escalar-Dpi $f
-    $f.Text = 'Ayuda - Descargar música'
+    $f.Text = 'Ayuda - MusicDL'
     $f.ClientSize = New-Object System.Drawing.Size(560, 560)
     $f.FormBorderStyle = 'FixedDialog'
     $f.MaximizeBox = $false; $f.MinimizeBox = $false
@@ -2499,7 +2504,7 @@ Si algo falla: menú → Ver detalles técnicos / Ver registro de errores.
 
 function Desinstalar {
     if ($script:modo -ne $null) { Aviso 'Espera a que termine o cancela antes de desinstalar.'; return }
-    if (-not (Pregunta "¿Desinstalar Descargar música?`n`nSe quitarán accesos directos, ajustes, listas e historial.`nTu música NO se borra.")) { return }
+    if (-not (Pregunta "¿Desinstalar MusicDL?`n`nSe quitarán accesos directos, ajustes, listas e historial.`nTu música NO se borra.")) { return }
     $quitarPiezas = Pregunta "¿Quitar también yt-dlp, FFmpeg, Deno y spotDL de la carpeta del programa?"
     Abandonar-Tarea
     if ($quitarPiezas) {
@@ -2520,6 +2525,7 @@ function Terminar-Desinstalacion {
         Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $dirApp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $env:APPDATA 'DescargarMusica') -Recurse -Force -ErrorAction SilentlyContinue
     $form.Enabled = $true
     Aviso "MusicDL se ha desinstalado. Tu música sigue en su carpeta.`n`nSe cerrará y se borrará este archivo."
     $bat = $env:DM_BAT
@@ -2538,7 +2544,7 @@ function Escribir-Acceso($lnk, $bat) {
     $s.Description = 'MusicDL — YouTube, SoundCloud y Spotify'
     $s.WindowStyle = 7
     $s.Save()
-    if ($script:hayWin) { try { [DMWin]::SetShortcutAppId($lnk, 'DescargarMusica.App') } catch {} }
+    if ($script:hayWin) { try { [DMWin]::SetShortcutAppId($lnk, 'MusicDL.App') } catch {} }
 }
 
 function Crear-Acceso {
@@ -2762,7 +2768,7 @@ try {
     }
 } catch {
     Registrar-Error "Arranque: $($_.Exception.Message)"
-    [System.Windows.Forms.MessageBox]::Show("Ha ocurrido un error inesperado:`n`n$($_.Exception.Message)`n`nSe ha guardado en el registro de errores.", 'Descargar música', 'OK', 'Error') | Out-Null
+    [System.Windows.Forms.MessageBox]::Show("Ha ocurrido un error inesperado:`n`n$($_.Exception.Message)`n`nSe ha guardado en el registro de errores.", 'MusicDL', 'OK', 'Error') | Out-Null
 } finally {
     if ($script:mutex) { try { $script:mutex.ReleaseMutex() } catch {}; try { $script:mutex.Dispose() } catch {} }
 }

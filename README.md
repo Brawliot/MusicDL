@@ -27,5 +27,5 @@ No hace falta instalar Python ni nada más.
 ## Notas
 
 - **Spotify**: no descarga el audio de Spotify Premium; usa YouTube/YouTube Music con metadatos de Spotify. La calidad es la del vídeo encontrado.
-- Datos locales del usuario: `%APPDATA%\DescargarMusica\` (ajustes, historial, binarios).
+- Datos locales del usuario: `%APPDATA%\MusicDL\` (ajustes, historial, binarios). Si tenías la versión antigua, se migran solos desde `%APPDATA%\DescargarMusica\`.
 - Requisitos: Windows 10/11, PowerShell, conexión a internet.
