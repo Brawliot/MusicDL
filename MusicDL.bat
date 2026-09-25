@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.14)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.15)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.14'
+$versionApp = '3.15'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -697,11 +697,12 @@ function Instalar-Herramienta-Directa($h) {
     return $false
 }
 
-function Nuevo-Popup($titulo, $texto) {
+function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $p = New-Object System.Windows.Forms.Form
     Escalar-Dpi $p
     $p.Text = 'MusicDL'
-    $p.ClientSize = New-Object System.Drawing.Size(500, 220)
+    $alto = if ($conCancelar) { 270 } else { 220 }
+    $p.ClientSize = New-Object System.Drawing.Size(500, $alto)
     $p.FormBorderStyle = 'FixedDialog'
     $p.ControlBox = $false
     $p.StartPosition = 'CenterScreen'
@@ -745,9 +746,27 @@ function Nuevo-Popup($titulo, $texto) {
     $pb.Location = New-Object System.Drawing.Point(96, 170); $pb.Size = New-Object System.Drawing.Size(380, 10)
     $p.Controls.Add($pb)
 
+    $btnCancel = $null
+    if ($conCancelar) {
+        $btnCancel = Nuevo-Boton $p 'CANCELAR' 180 210 140 36
+        $btnCancel.Add_Click({
+            $script:popupCancelado = $true
+            $script:popupOcupado = $false
+            if ($script:popupProc -and -not $script:popupProc.HasExited) {
+                try {
+                    Start-Process taskkill -ArgumentList "/PID $($script:popupProc.Id) /T /F" -WindowStyle Hidden -Wait
+                } catch {}
+            }
+            if ($script:pop -and $script:pop.paso) {
+                try { $script:pop.paso.Text = 'Cancelando...' } catch {}
+            }
+            try { if ($script:pop) { $script:pop.form.Close() } } catch {}
+        })
+    }
+
     $script:popupOcupado = $true
     $p.Add_FormClosing({ param($s, $e) if ($script:popupOcupado -and $e.CloseReason -eq 'UserClosing') { $e.Cancel = $true } })
-    return @{ form = $p; paso = $l3 }
+    return @{ form = $p; paso = $l3; cancelar = $btnCancel }
 }
 
 function Mostrar-Popup-Encima($titulo, $texto) {
@@ -2009,14 +2028,27 @@ function Resolver-Spotify-Urls($enlaces) {
     $rS = Join-Path $dirApp 'spotdl-url-salida.txt'
     $rE = Join-Path $dirApp 'spotdl-url-errores.txt'
     Remove-Item -LiteralPath $rS, $rE -Force -ErrorAction SilentlyContinue
+    $script:popupProc = $null
     try {
-        $p = Start-Process -FilePath $spotdl -ArgumentList $argsList.ToArray() -Wait -NoNewWindow -PassThru `
+        $proc = Start-Process -FilePath $spotdl -ArgumentList $argsList.ToArray() -NoNewWindow -PassThru `
             -RedirectStandardOutput $rS -RedirectStandardError $rE
-        $null = $p
+        $script:popupProc = $proc
+        while ($proc -and -not $proc.HasExited) {
+            if ($script:popupCancelado) {
+                try { Start-Process taskkill -ArgumentList "/PID $($proc.Id) /T /F" -WindowStyle Hidden -Wait } catch {}
+                break
+            }
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 120
+        }
     } catch {
         Registrar-Error "spotdl url: $($_.Exception.Message)"
+        $script:popupProc = $null
         return @()
     }
+    $script:popupProc = $null
+    if ($script:popupCancelado) { return @() }
+
     $urls = New-Object System.Collections.Generic.List[string]
     if (Test-Path -LiteralPath $rS) {
         foreach ($l in (Get-Content -LiteralPath $rS -Encoding UTF8 -ErrorAction SilentlyContinue)) {
@@ -2052,16 +2084,28 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
 
     $script:ytResueltosSp = @()
     $script:enlacesSpResolve = @($enlaces)
-    $script:pop = Nuevo-Popup 'Spotify' "Buscando las canciones en YouTube...`nspotDL empareja; yt-dlp descarga (evita errores 403)."
+    $script:popupCancelado = $false
+    $script:pop = Nuevo-Popup 'Spotify' "Buscando las canciones en YouTube...`nspotDL empareja; yt-dlp descarga (evita errores 403)." $true
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
         $script:pop.paso.Text = 'Emparejando con YouTube...'
         [System.Windows.Forms.Application]::DoEvents()
         $script:ytResueltosSp = @(Resolver-Spotify-Urls $script:enlacesSpResolve)
-        Start-Sleep -Milliseconds 200
-        Cerrar-Popup
+        if (-not $script:popupCancelado) {
+            Start-Sleep -Milliseconds 150
+            Cerrar-Popup
+        }
     })
     [void]$script:pop.form.ShowDialog()
+    $script:pop = $null
+    $form.Enabled = $true
+
+    if ($script:popupCancelado) {
+        Estado 'Búsqueda de Spotify cancelada.'
+        Modo $null
+        Barra-Tarea 0
+        return
+    }
 
     $ytUrls = @($script:ytResueltosSp)
     if ($ytUrls.Count -eq 0) {
