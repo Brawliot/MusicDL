@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.26)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.28)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.26'
+$versionApp = '3.28'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -835,10 +835,11 @@ function Poner-Popup-Barra($pct) {
 
 function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $p = New-Object System.Windows.Forms.Form
-    Escalar-Dpi $p
+    # Sin AutoScale DPI: si no, en pantallas escaladas el título/texto se cortan
+    $p.AutoScaleMode = 'None'
     $p.Text = 'MusicDL'
-    $ancho = 580
-    $alto = if ($conCancelar) { 390 } else { 330 }
+    $ancho = 620
+    $alto = if ($conCancelar) { 380 } else { 320 }
     $p.ClientSize = New-Object System.Drawing.Size($ancho, $alto)
     $p.FormBorderStyle = 'FixedDialog'
     $p.ControlBox = $false
@@ -858,31 +859,33 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
         $pic = New-Object System.Windows.Forms.PictureBox
         $pic.Image = $script:bmpIcono
         $pic.SizeMode = 'Zoom'
-        $pic.Location = New-Object System.Drawing.Point(24, 22)
-        $pic.Size = New-Object System.Drawing.Size(48, 48)
+        $pic.Location = New-Object System.Drawing.Point(24, 20)
+        $pic.Size = New-Object System.Drawing.Size(44, 44)
         $p.Controls.Add($pic)
     }
     $l1 = New-Object System.Windows.Forms.Label
-    $l1.Text = $titulo; $l1.Font = $fPopup; $l1.ForeColor = $colTexto
-    $l1.Location = New-Object System.Drawing.Point(88, 28); $l1.Size = New-Object System.Drawing.Size(460, 36)
+    $l1.Text = $titulo
+    $l1.Font = $fPopup
+    $l1.ForeColor = $colTexto
+    $l1.AutoSize = $false
+    $l1.Location = New-Object System.Drawing.Point(80, 24)
+    $l1.Size = New-Object System.Drawing.Size(520, 40)
     $p.Controls.Add($l1)
 
-    # Texto de explicación (completo, sin solaparse con el progreso)
     $l2 = New-Object System.Windows.Forms.Label
     $l2.Text = $texto
     $l2.ForeColor = $colSuave
     $l2.Font = $fPequena
-    $l2.Location = New-Object System.Drawing.Point(24, 82)
-    $l2.Size = New-Object System.Drawing.Size(532, 70)
+    $l2.Location = New-Object System.Drawing.Point(24, 78)
+    $l2.Size = New-Object System.Drawing.Size(572, 70)
     $p.Controls.Add($l2)
 
-    # Estado / progreso (más abajo)
     $l3 = New-Object System.Windows.Forms.Label
     $l3.Text = 'Empezando...'
     $l3.Font = $fNormal
     $l3.ForeColor = $colAcento
-    $l3.Location = New-Object System.Drawing.Point(24, 168)
-    $l3.Size = New-Object System.Drawing.Size(532, 56)
+    $l3.Location = New-Object System.Drawing.Point(24, 164)
+    $l3.Size = New-Object System.Drawing.Size(450, 48)
     $l3.AutoEllipsis = $false
     $p.Controls.Add($l3)
 
@@ -891,13 +894,13 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
     $lblPct.Font = $fEtiqueta
     $lblPct.ForeColor = $colSuave
     $lblPct.TextAlign = 'MiddleRight'
-    $lblPct.Location = New-Object System.Drawing.Point(24, 228)
-    $lblPct.Size = New-Object System.Drawing.Size(532, 22)
+    $lblPct.Location = New-Object System.Drawing.Point(480, 172)
+    $lblPct.Size = New-Object System.Drawing.Size(116, 32)
     $p.Controls.Add($lblPct)
 
     $track = New-Object System.Windows.Forms.Panel
-    $track.Location = New-Object System.Drawing.Point(24, 256)
-    $track.Size = New-Object System.Drawing.Size(532, 18)
+    $track.Location = New-Object System.Drawing.Point(24, 224)
+    $track.Size = New-Object System.Drawing.Size(572, 18)
     $track.BackColor = $colBorde
     $fill = New-Object System.Windows.Forms.Panel
     $fill.BackColor = $colAcento
@@ -942,7 +945,7 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
 
     $btnCancel = $null
     if ($conCancelar) {
-        $btnCancel = Nuevo-Boton $p 'CANCELAR' 220 318 140 40
+        $btnCancel = Nuevo-Boton $p 'CANCELAR' 240 300 140 42
         $btnCancel.Add_Click({
             $script:popupCancelado = $true
             $script:popupOcupado = $false
@@ -994,33 +997,52 @@ function Instalar-Si-Falta {
     $script:pop = Nuevo-Popup 'Preparando MusicDL' "Primera vez: se descargan yt-dlp, FFmpeg, Deno y spotDL desde internet.`nFFmpeg ocupa ~100 MB. Verás el progreso abajo. Puedes pulsar CANCELAR." $true
     $script:pop.form.ShowInTaskbar = $true
     $script:pop.form.Add_Shown({
-        $i = 0
-        $todas = @(Faltan)
-        $totalPasos = [Math]::Max($todas.Count, 1)
-        foreach ($h in $todas) {
-            if ($script:popupCancelado) { break }
-            $i++
-            $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
-            if ($script:pop.pct) { $script:pop.pct.Text = '' }
-            Poner-Popup-Barra $null
-            [System.Windows.Forms.Application]::DoEvents()
-            $ok = Instalar-Herramienta-Directa $h
-            if ($script:popupCancelado) { break }
-            if (-not $ok) {
-                # Respaldo winget si existe
-                $wg = Ruta-De 'winget'
-                if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
-                if ($wg -and $h.id) {
-                    $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
+        $script:pop.paso.Text = 'Iniciando instalación...'
+        if ($script:pop.pct) { $script:pop.pct.Text = '' }
+        Poner-Popup-Barra $null
+        try { $script:pop.paso.Refresh(); $script:pop.form.Refresh() } catch {}
+        # Timer de un disparo (BeginInvoke/Action falla a menudo en PowerShell WinForms)
+        if ($script:timerInstalar) { try { $script:timerInstalar.Stop(); $script:timerInstalar.Dispose() } catch {} }
+        $script:timerInstalar = New-Object System.Windows.Forms.Timer
+        $script:timerInstalar.Interval = 80
+        $script:timerInstalar.Add_Tick({
+            try {
+                if ($script:timerInstalar) { $script:timerInstalar.Stop(); $script:timerInstalar.Dispose(); $script:timerInstalar = $null }
+            } catch {}
+            try {
+                $i = 0
+                $todas = @(Faltan)
+                $totalPasos = [Math]::Max($todas.Count, 1)
+                foreach ($h in $todas) {
+                    if ($script:popupCancelado) { break }
+                    $i++
+                    $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
+                    if ($script:pop.pct) { $script:pop.pct.Text = '' }
+                    Poner-Popup-Barra $null
+                    try { $script:pop.paso.Refresh() } catch {}
                     [System.Windows.Forms.Application]::DoEvents()
-                    try {
-                        Start-Process -FilePath $wg -ArgumentList "install --id $($h.id) -e --silent --accept-source-agreements --accept-package-agreements" -Wait -NoNewWindow
-                    } catch { Registrar-Error "winget $($h.cmd): $($_.Exception.Message)" }
+                    $ok = Instalar-Herramienta-Directa $h
+                    if ($script:popupCancelado) { break }
+                    if (-not $ok) {
+                        $wg = Ruta-De 'winget'
+                        if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
+                        if ($wg -and $h.id) {
+                            $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
+                            [System.Windows.Forms.Application]::DoEvents()
+                            try {
+                                Start-Process -FilePath $wg -ArgumentList "install --id $($h.id) -e --silent --accept-source-agreements --accept-package-agreements" -Wait -NoNewWindow
+                            } catch { Registrar-Error "winget $($h.cmd): $($_.Exception.Message)" }
+                        }
+                    }
+                    Refrescar-Path
                 }
+            } catch {
+                Registrar-Error "Instalación: $($_.Exception.Message)"
+            } finally {
+                Cerrar-Popup
             }
-            Refrescar-Path
-        }
-        Cerrar-Popup
+        })
+        $script:timerInstalar.Start()
     })
     [void]$script:pop.form.ShowDialog()
 
@@ -3429,9 +3451,12 @@ $formMini.Add_FormClosing({
     }
 })
 $form.Add_Shown({
+    $pasoUi = 'inicio'
     try {
+        $pasoUi = 'marcar'
         Marcar-Arranque-Ok
         if ($script:hayWin) {
+            $pasoUi = 'tema'
             try { [DMWin]::TemaOscuro($form.Handle) } catch {}
             try { [DMWin]::TemaOscuro($txtEnlace.Handle) } catch {}
             try { [DMWin]::TemaOscuro($txtCarpeta.Handle) } catch {}
@@ -3440,15 +3465,17 @@ $form.Add_Shown({
             try { [DMWin]::TemaOscuro($lvListas.Handle) } catch {}
             try { [DMWin]::Pista($txtNuevaLista.Handle, 'Pega aquí el enlace de una lista') } catch {}
         }
+        $pasoUi = 'acceso'
         Crear-Acceso
+        $pasoUi = 'ayuda'
         Actualizar-Ayuda
+        $pasoUi = 'listas'
         Pintar-Listas
+        $pasoUi = 'cola'
         Pintar-Cola
-        Comprobar-App
         try { Refrescar-Path } catch {}
         $lblAct.Text = 'Todo listo'
 
-        # Usar $script: para que el Tick no pierda la referencia (bug típico de PowerShell)
         if ($script:timerAct) { try { $script:timerAct.Stop(); $script:timerAct.Dispose() } catch {} }
         $script:timerAct = New-Object System.Windows.Forms.Timer
         $script:timerAct.Interval = 2000
@@ -3465,9 +3492,19 @@ $form.Add_Shown({
         })
         $script:timerAct.Start()
 
+        # Comprobar versión un poco después (evitar errores en Shown)
+        if ($script:timerCheckApp) { try { $script:timerCheckApp.Stop(); $script:timerCheckApp.Dispose() } catch {} }
+        $script:timerCheckApp = New-Object System.Windows.Forms.Timer
+        $script:timerCheckApp.Interval = 800
+        $script:timerCheckApp.Add_Tick({
+            try { $script:timerCheckApp.Stop(); $script:timerCheckApp.Dispose(); $script:timerCheckApp = $null } catch {}
+            try { Comprobar-App } catch { Registrar-Error "Comprobar-App diferida: $($_.Exception.Message)" }
+        })
+        $script:timerCheckApp.Start()
+
         if ($config.ventanaMini) { Mostrar-Mini }
     } catch {
-        Registrar-Error "Al mostrar ventana: $($_.Exception.Message)"
+        Registrar-Error "Al mostrar ventana ($pasoUi): $($_.Exception.Message)"
         try { $lblAct.Text = 'Listo' } catch {}
     }
 })
@@ -3477,7 +3514,9 @@ $form.Add_Shown({
 # ================================================================
 [System.Windows.Forms.Application]::add_ThreadException({
     param($sender, $e)
-    Registrar-Error "UI: $($e.Exception.Message)"
+    $msg = $e.Exception.Message
+    try { $msg += " | " + $e.Exception.StackTrace } catch {}
+    Registrar-Error "UI: $msg"
 })
 [AppDomain]::CurrentDomain.add_UnhandledException({
     param($sender, $e)
