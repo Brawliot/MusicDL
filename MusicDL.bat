@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.13)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.14)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.13'
+$versionApp = '3.14'
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
 $urlApp = 'https://raw.githubusercontent.com/Brawliot/MusicDL/main/MusicDL.bat'
 # Enlace Raw de la firma (.sig). Si vacío, se usa $urlApp + '.sig'
@@ -1611,10 +1611,38 @@ function Traducir-Error($l) {
     }
 }
 
-function Poner-Barra($pct) {
+function Poner-Barra($pctCancion = 0) {
     $d = $script:dl
-    if ($d.total -gt 1) { $v = (($d.actual - 1) + $pct / 100) / $d.total } else { $v = $pct / 100 }
-    $valor = [int][Math]::Min([Math]::Max($v * 1000, 0), 1000)
+    if (-not $d) { return }
+    $total = [Math]::Max([int]$d.total, 1)
+    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores
+    if ($total -gt 1) {
+        # Canción actual: la siguiente a las ya hechas, o el índice de playlist si existe
+        $idx = [int]$d.actual
+        if ($idx -lt 1) { $idx = $hechos + 1 }
+        if ($idx -gt $total) { $idx = $total }
+        $v = (($idx - 1) + ([double]$pctCancion / 100.0)) / $total
+        # No retroceder respecto a canciones ya cerradas
+        $minV = $hechos / $total
+        if ($v -lt $minV) { $v = $minV }
+    } else {
+        $v = [double]$pctCancion / 100.0
+    }
+    if ($v -gt 1) { $v = 1 }
+    if ($v -lt 0) { $v = 0 }
+    $valor = [int]($v * 1000)
+    Set-BarraValor $barra $valor
+    Set-BarraValor $barraMini $valor
+    Barra-Tarea 2 $valor
+}
+
+function Poner-Barra-Canciones {
+    $d = $script:dl
+    if (-not $d) { return }
+    $total = [Math]::Max([int]$d.total, 1)
+    $hechos = [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores
+    $v = [Math]::Min($hechos / $total, 1.0)
+    $valor = [int]($v * 1000)
     Set-BarraValor $barra $valor
     Set-BarraValor $barraMini $valor
     Barra-Tarea 2 $valor
@@ -1636,20 +1664,37 @@ function Marcar-Completado($ruta) {
     $extra = if ($d.calidad) { "  [$($d.calidad)]" } else { '' }
     $tag = if ($d.motor -eq 'spotify-yt' -or $d.motor -eq 'spotdl') { '  [Spotify→YT]' } else { '' }
     Resultado ([string][char]0x2713 + '  ' + $nombre + $extra + $tag)
-    Estado "Guardando:`n$nombre"
+    Estado "Guardado:`n$nombre"
+    $d.actual = [Math]::Max([int]$d.actual, [int]$d.nuevas + [int]$d.saltadas + [int]$d.nErrores)
+    Poner-Barra-Canciones
 }
 
 function Procesar-Linea($l) {
     $d = $script:dl
+    if (-not $l) { return }
+    # Plantilla propia [DM]pct|idx|tot|titulo
     if ($l -match '^\[DM\](.*?)\|(.*?)\|(.*?)\|(.*)$') {
         $gPct = $matches[1]; $gIdx = $matches[2]; $gTot = $matches[3]; $gTit = $matches[4]
         $pct = 0.0
         [void][double]::TryParse(($gPct -replace '[^\d\.]', ''), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$pct)
-        if ($gIdx -match '^\d+$' -and $gTot -match '^\d+$') { $d.actual = [int]$gIdx; $d.total = [int]$gTot }
-        $d.titulo = $gTit
+        if ($gIdx -match '^\d+$' -and $gTot -match '^\d+$' -and [int]$gTot -gt 0) {
+            $d.actual = [int]$gIdx
+            $d.total = [Math]::Max([int]$d.total, [int]$gTot)
+        }
+        if ($gTit -and $gTit -ne 'NA' -and $gTit -ne 'None') { $d.titulo = $gTit }
         Poner-Barra $pct
         $cual = if ($d.total -gt 1) { "canción $($d.actual) de $($d.total)" } else { 'canción' }
         Estado ("Descargando {0} ({1:0}%):`n{2}" -f $cual, $pct, $d.titulo)
+        return
+    }
+    # Fallback: línea normal de yt-dlp "[download]  45.2%"
+    if ($l -match '^\[download\]\s+(\d{1,3}(?:\.\d+)?)%') {
+        $pct = [double]$matches[1]
+        Poner-Barra $pct
+        if ($d.titulo) {
+            $cual = if ($d.total -gt 1) { "canción $($d.actual) de $($d.total)" } else { 'canción' }
+            Estado ("Descargando {0} ({1:0}%):`n{2}" -f $cual, $pct, $d.titulo)
+        }
         return
     }
     if ($l -match 'Downloading format (\d+)[^\]]*?(?:audio only)?.*?(\d+k?|~\d+k)') {
@@ -1668,6 +1713,11 @@ function Procesar-Linea($l) {
     if ($l -match '^\[[\w:]+\] Extracting URL: (\S+)') {
         $u = $matches[1]
         if ($d.porUrl.ContainsKey($u)) { $d.listaActual = $u }
+        if ($d.total -gt 1) {
+            $d.indiceUrl = 1 + [int]$d.indiceUrl
+            $d.actual = [Math]::Min([int]$d.indiceUrl, [int]$d.total)
+            Poner-Barra 0
+        }
         return
     }
     if ($l -match '^\[download\] Downloading playlist: (.+)$') {
@@ -1677,7 +1727,7 @@ function Procesar-Linea($l) {
         return
     }
     if ($l -match 'Downloading (?:item|video) (\d+) of (\d+)') {
-        $d.actual = [int]$matches[1]; $d.total = [int]$matches[2]
+        $d.actual = [int]$matches[1]; $d.total = [Math]::Max([int]$d.total, [int]$matches[2])
         $d.yaEstaba = $false; $d.titulo = ''; $d.calidad = $null
         $lblCalidad.Text = ''
         Poner-Barra 0
@@ -1686,6 +1736,7 @@ function Procesar-Linea($l) {
     if ($l -match '^\[download\] .+ has already been downloaded') {
         $d.yaEstaba = $true; $d.saltadas++
         Resultado ('–  Ya estaba en la carpeta: ' + $d.titulo)
+        Poner-Barra-Canciones
         return
     }
     # En curso (aún no terminado)
@@ -1701,6 +1752,7 @@ function Procesar-Linea($l) {
     }
     if ($l -match '^\[download\] 100% of .+ in ') {
         if ($d.formato -eq 'original' -and $d.enCurso) { Marcar-Completado $d.enCurso }
+        else { Poner-Barra 100 }
         return
     }
     if ($l -match '^Deleting original file') { $d.enCurso = $null; return }
@@ -1708,6 +1760,7 @@ function Procesar-Linea($l) {
         if ($l -match '^\[download\] (\S+): has already') { [void]$d.idsSaltados.Add($matches[1]) }
         $d.saltadas++
         Resultado ('–  Ya la tenías en este formato, se ha saltado')
+        Poner-Barra-Canciones
         return
     }
     if ($l -match '^ERROR:') {
@@ -1717,6 +1770,7 @@ function Procesar-Linea($l) {
         $quien = if ($d.titulo) { $d.titulo } elseif ($d.total -gt 1) { "Canción $($d.actual) de $($d.total)" } else { 'La canción' }
         Resultado ([string][char]0x2717 + '  ' + $quien + '  —  ' + $txt)
         if (-not $d.errores.Contains($txt)) { [void]$d.errores.Add($txt) }
+        Poner-Barra-Canciones
     }
 }
 
@@ -1759,7 +1813,7 @@ function Construir-Args($enlaces, $sync, $indices) {
     $fmt = $formatos[$cmbFormato.SelectedIndex]
     $carpeta = $txtCarpeta.Text.TrimEnd('\')
     $a = New-Object System.Collections.Generic.List[string]
-    $a.AddRange([string[]]@('--newline', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
+    $a.AddRange([string[]]@('--newline', '--progress', '--color', 'never', '--no-mtime', '--encoding', 'utf-8', '--windows-filenames'))
     $a.Add('--concurrent-fragments'); $a.Add('4')
 
     $ff = Ruta-De 'ffmpeg'
@@ -1781,7 +1835,9 @@ function Construir-Args($enlaces, $sync, $indices) {
     }
 
     $a.Add('-P'); $a.Add((Q $carpeta))
+    # Plantilla de progreso (funciona aunque la salida no sea una terminal)
     $a.Add('--progress-template'); $a.Add((Q 'download:[DM]%(progress._percent_str)s|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s'))
+    $a.Add('--progress-template'); $a.Add((Q 'postprocess:[DM]100%|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s'))
 
     if ($cmbOrganizar.SelectedIndex -eq 2) {
         $a.Add('--parse-metadata'); $a.Add((Q 'title:(?P<artist>.+?) - (?P<title>.+)'))
@@ -1837,12 +1893,13 @@ function Lanzar-Descarga($enlaces, $sync = $false, $indices = '') {
 
     $script:dl = @{
         nuevas = 0; saltadas = 0; nErrores = 0; errores = New-Object System.Collections.ArrayList
-        actual = 1; total = 1; titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
+        actual = 1; total = [Math]::Max($built.finales.Count, 1); titulo = ''; cancelada = $false; yaEstaba = $false; enCurso = $null
         idsSaltados = New-Object System.Collections.ArrayList
         sync = $sync; porUrl = $porUrl; listaActual = $null; nuevasPorLista = @{}
         inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = $null
         carpetaEscaneo = $null; motor = 'yt-dlp'
         completados = New-Object System.Collections.Generic.List[string]
+        indiceUrl = 0
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = $indices; motor = 'yt-dlp' }
     $script:ultimosArgs = ($built.args -join ' ')
@@ -2025,6 +2082,7 @@ function Lanzar-Descarga-Spotify($enlaces, $sync = $false) {
         inicio = Get-Date; carpeta = $built.carpeta; formato = $built.fmt; calidad = 'Spotify→YouTube'
         carpetaEscaneo = $null; motor = 'spotify-yt'
         completados = New-Object System.Collections.Generic.List[string]
+        indiceUrl = 0
     }
     $script:ultimaPeticion = @{ enlaces = $enlaces; sync = $sync; indices = ''; motor = 'spotdl' }
     $script:ultimosArgs = ($built.args -join ' ')
