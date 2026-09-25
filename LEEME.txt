@@ -1,15 +1,19 @@
-MusicDL v3.21
+MusicDL v3.22
 Made by WLY
 
 Uso
 ---
-1. Extrae este ZIP
+1. Extrae este ZIP (o descarga solo MusicDL.bat)
 2. Abre MusicDL.bat
 3. Si Windows avisa: Más información → Ejecutar de todas formas
 4. La primera vez instalará yt-dlp, FFmpeg, Deno y spotDL
 5. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa Descargar
 
 Solo Windows 10/11. No hace falta Python ni Git.
+
+Novedades 3.22
+--------------
+- Corregido fallo al abrir en PC nuevo (tooltip del formato)
 
 Novedades 3.18–3.21
 -------------------
