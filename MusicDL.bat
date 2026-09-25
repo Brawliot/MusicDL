@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.29)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.30)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.29'
+$versionApp = '3.30'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -1196,17 +1196,121 @@ function Nuevo-BotonPrincipal($padre, $texto, $x, $y, $ancho, $alto, $fuente) {
 }
 
 function Nueva-Casilla($padre, $texto, $x, $y, $marcada, $ancho) {
-    $c = New-Object System.Windows.Forms.CheckBox
-    $c.Text = $texto
-    $c.Location = New-Object System.Drawing.Point($x, $y)
-    $c.Size = New-Object System.Drawing.Size($ancho, 24)
-    $c.Checked = [bool]$marcada
-    $c.ForeColor = $colTexto
-    $c.BackColor = [System.Drawing.Color]::Transparent
-    $c.FlatStyle = 'Flat'
-    $c.FlatAppearance.BorderSize = 0
-    $padre.Controls.Add($c)
-    return $c
+    # CheckBox plano de WinForms casi no se ve en tema oscuro: caja + visto dibujados a mano.
+    $estado = New-Object psobject
+    Add-Member -InputObject $estado -NotePropertyName _checked -NotePropertyValue ([bool]$marcada)
+    Add-Member -InputObject $estado -NotePropertyName _handlers -NotePropertyValue (New-Object System.Collections.ArrayList)
+    Add-Member -InputObject $estado -NotePropertyName Caja -NotePropertyValue $null
+    Add-Member -InputObject $estado -NotePropertyName Etiqueta -NotePropertyValue $null
+    Add-Member -InputObject $estado -NotePropertyName Wrap -NotePropertyValue $null
+
+    $fondo = try { $padre.BackColor } catch { $colPanel }
+
+    $wrap = New-Object System.Windows.Forms.Panel
+    $wrap.Location = New-Object System.Drawing.Point($x, $y)
+    $wrap.Size = New-Object System.Drawing.Size($ancho, 26)
+    $wrap.BackColor = $fondo
+    $wrap.Cursor = [System.Windows.Forms.Cursors]::Hand
+
+    $caja = New-Object System.Windows.Forms.Panel
+    $caja.Location = New-Object System.Drawing.Point(0, 4)
+    $caja.Size = New-Object System.Drawing.Size(18, 18)
+    $caja.BackColor = $colCampo
+    $caja.Cursor = [System.Windows.Forms.Cursors]::Hand
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = $texto
+    $lbl.Location = New-Object System.Drawing.Point(26, 3)
+    $lbl.Size = New-Object System.Drawing.Size([Math]::Max(40, $ancho - 28), 20)
+    $lbl.ForeColor = $colTexto
+    $lbl.BackColor = $fondo
+    $lbl.Font = $fNormal
+    $lbl.Cursor = [System.Windows.Forms.Cursors]::Hand
+
+    $estado.Caja = $caja
+    $estado.Etiqueta = $lbl
+    $estado.Wrap = $wrap
+    $wrap.Tag = $estado
+    $caja.Tag = $estado
+    $lbl.Tag = $estado
+
+    $caja.Add_Paint({
+        param($s, $e)
+        $est = $s.Tag
+        if (-not $est) { return }
+        $g = $e.Graphics
+        $g.SmoothingMode = 'AntiAlias'
+        $g.PixelOffsetMode = 'HighQuality'
+        $r = New-Object System.Drawing.Rectangle(1, 1, ($s.Width - 3), ($s.Height - 3))
+        $bg = if ($est._checked) { $colAcento } else { $colCampo }
+        $br = New-Object System.Drawing.SolidBrush $bg
+        $g.FillRectangle($br, $r)
+        $br.Dispose()
+        $borde = if ($est._checked) { $colAcento } else { $colSuave }
+        $pen = New-Object System.Drawing.Pen $borde, 1.5
+        $g.DrawRectangle($pen, $r)
+        $pen.Dispose()
+        if ($est._checked) {
+            $pen2 = New-Object System.Drawing.Pen $colBlanco, 2.0
+            $pen2.StartCap = 'Round'
+            $pen2.EndCap = 'Round'
+            $pen2.LineJoin = 'Round'
+            $g.DrawLines($pen2, @(
+                (New-Object System.Drawing.Point(4, 9)),
+                (New-Object System.Drawing.Point(7, 13)),
+                (New-Object System.Drawing.Point(14, 5))
+            ))
+            $pen2.Dispose()
+        }
+    })
+
+    $toggle = {
+        param($sender, $e)
+        $est = $sender.Tag
+        if (-not $est -or -not $est.Wrap -or -not $est.Wrap.Enabled) { return }
+        $est.Checked = -not $est._checked
+    }
+    $wrap.Add_Click($toggle)
+    $caja.Add_Click($toggle)
+    $lbl.Add_Click($toggle)
+
+    Add-Member -InputObject $estado -MemberType ScriptProperty -Name Checked -Value {
+        return [bool]$this._checked
+    } -SecondValue {
+        param($v)
+        $nv = [bool]$v
+        if ($this._checked -eq $nv) {
+            if ($this.Caja -and -not $this.Caja.IsDisposed) { $this.Caja.Invalidate() }
+            return
+        }
+        $this._checked = $nv
+        if ($this.Caja -and -not $this.Caja.IsDisposed) { $this.Caja.Invalidate() }
+        foreach ($h in @($this._handlers)) {
+            try { & $h $this ([EventArgs]::Empty) } catch {}
+        }
+    }
+
+    Add-Member -InputObject $estado -MemberType ScriptProperty -Name Enabled -Value {
+        return [bool]$this.Wrap.Enabled
+    } -SecondValue {
+        param($v)
+        $en = [bool]$v
+        $this.Wrap.Enabled = $en
+        $this.Caja.Enabled = $en
+        $this.Etiqueta.Enabled = $en
+        $this.Etiqueta.ForeColor = $(if ($en) { $colTexto } else { $colTenue })
+        if ($this.Caja -and -not $this.Caja.IsDisposed) { $this.Caja.Invalidate() }
+    }
+
+    Add-Member -InputObject $estado -MemberType ScriptMethod -Name Add_CheckedChanged -Value {
+        param($handler)
+        if ($handler) { [void]$this._handlers.Add($handler) }
+    }
+
+    $wrap.Controls.Add($caja)
+    $wrap.Controls.Add($lbl)
+    $padre.Controls.Add($wrap)
+    return $estado
 }
 
 function Nuevo-Combo($padre, $x, $y, $ancho, $opciones, $sel) {
@@ -3108,6 +3212,46 @@ function Mostrar-Selector($lista) {
     $cl.IntegralHeight = $false
     $cl.BackColor = $colCampo
     $cl.ForeColor = $colTexto
+    $cl.DrawMode = 'OwnerDrawFixed'
+    $cl.ItemHeight = 28
+    $cl.Add_DrawItem({
+        param($s, $e)
+        if ($e.Index -lt 0) { return }
+        $g = $e.Graphics
+        $g.SmoothingMode = 'AntiAlias'
+        $marcado = $s.GetItemChecked($e.Index)
+        $sel = (($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0)
+        $fondo = if ($sel) { $colHover } else { $colCampo }
+        $brF = New-Object System.Drawing.SolidBrush $fondo
+        $g.FillRectangle($brF, $e.Bounds)
+        $brF.Dispose()
+        $box = New-Object System.Drawing.Rectangle(($e.Bounds.X + 6), ($e.Bounds.Y + 6), 16, 16)
+        $bg = if ($marcado) { $colAcento } else { $colPanel }
+        $brB = New-Object System.Drawing.SolidBrush $bg
+        $g.FillRectangle($brB, $box)
+        $brB.Dispose()
+        $pen = New-Object System.Drawing.Pen $(if ($marcado) { $colAcento } else { $colSuave }), 1.5
+        $g.DrawRectangle($pen, $box)
+        $pen.Dispose()
+        if ($marcado) {
+            $pen2 = New-Object System.Drawing.Pen $colBlanco, 2.0
+            $pen2.StartCap = 'Round'; $pen2.EndCap = 'Round'
+            $ox = $box.X; $oy = $box.Y
+            $g.DrawLines($pen2, @(
+                (New-Object System.Drawing.Point(($ox + 3), ($oy + 8))),
+                (New-Object System.Drawing.Point(($ox + 6), ($oy + 12))),
+                (New-Object System.Drawing.Point(($ox + 13), ($oy + 4)))
+            ))
+            $pen2.Dispose()
+        }
+        $brT = New-Object System.Drawing.SolidBrush $colTexto
+        $tr = New-Object System.Drawing.Rectangle(($e.Bounds.X + 28), $e.Bounds.Y, ($e.Bounds.Width - 32), $e.Bounds.Height)
+        $sf = New-Object System.Drawing.StringFormat
+        $sf.LineAlignment = 'Center'
+        $sf.Trimming = 'EllipsisCharacter'
+        $g.DrawString([string]$s.Items[$e.Index], $s.Font, $brT, $tr, $sf)
+        $brT.Dispose(); $sf.Dispose()
+    })
     $f.Controls.Add($cl)
     foreach ($x in $lista) {
         $t = if ($x.titulo) { $x.titulo } else { "Canción $($x.idx)" }
@@ -3119,6 +3263,7 @@ function Mostrar-Selector($lista) {
     $cl.Add_ItemCheck({ param($s, $e)
         $n = $cl.CheckedItems.Count + $(if ($e.NewValue -eq 'Checked') { 1 } else { -1 })
         $lblCuenta.Text = "$n de $($cl.Items.Count) marcadas"
+        try { $cl.Invalidate() } catch {}
     })
     $lblCuenta.Text = "$($cl.CheckedItems.Count) de $($cl.Items.Count) marcadas"
 
