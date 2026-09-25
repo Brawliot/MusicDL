@@ -27,12 +27,12 @@ exit /b
 #>
 
 # ================================================================
-#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.28)
+#  MusicDL  -  YouTube, SoundCloud y Spotify (spotDL)  (v3.29)
 #  Usa yt-dlp, FFmpeg, Deno y spotDL (instalación directa; winget como respaldo).
 #  Actualizaciones firmadas con clave RSA del autor.
 # ================================================================
 
-$versionApp = '3.28'
+$versionApp = '3.29'
 $script:sugerirUpdateYtdlp = $false
 $script:yaOfrecioUpdateSesion = $false
 # Enlace Raw del .bat en GitHub. Si está vacío, no busca versiones nuevas.
@@ -324,6 +324,7 @@ $herramientas = @(
         tipo = 'exe-spotdl'; destino = 'spotdl.exe'
     }
 )
+$script:herramientas = $herramientas
 
 # ---------- Colores y fuentes (estilo deck / Rekordbox) ----------
 $colFondo     = [System.Drawing.ColorTranslator]::FromHtml('#0E0E10')
@@ -371,7 +372,7 @@ function Ruta-De($cmd) {
     if ($c) { return $c.Source } else { return $null }
 }
 
-function Faltan { return @($herramientas | Where-Object { -not (Ruta-De $_.cmd) }) }
+function Faltan { return @($script:herramientas | Where-Object { -not (Ruta-De $_.cmd) }) }
 
 function Url-Spotdl-Windows {
     try {
@@ -390,7 +391,7 @@ function Url-Spotdl-Windows {
 }
 
 function Instalar-Spotdl {
-    $h = $herramientas | Where-Object { $_.cmd -eq 'spotdl' } | Select-Object -First 1
+    $h = $script:herramientas | Where-Object { $_.cmd -eq 'spotdl' } | Select-Object -First 1
     if (-not $h) { return $false }
     if (Test-Path -LiteralPath (Join-Path $dirBin 'spotdl.exe')) { return $true }
     return (Instalar-Herramienta-Directa $h)
@@ -934,9 +935,15 @@ function Nuevo-Popup($titulo, $texto, $conCancelar = $false) {
         if ($script:popupAnimPos -le 0) { $script:popupAnimPos = 0; $script:popupAnimDir = 1 }
         $script:popupAnimFill.Left = [int]$script:popupAnimPos
     })
-    $p.Add_Shown({ $anim.Start() })
+    $p.Add_Shown({
+        try {
+            if ($anim -and -not $anim.Enabled) { $anim.Start() }
+        } catch {
+            try { Registrar-Error "Popup anim Shown: $($_.Exception.Message)" } catch {}
+        }
+    })
     $p.Add_FormClosed({
-        try { $anim.Stop(); $anim.Dispose() } catch {}
+        try { if ($anim) { $anim.Stop(); $anim.Dispose() } } catch {}
         $script:popupAnimFill = $null
         $script:popupAnimTrack = $null
         $script:popupLblPct = $null
@@ -995,13 +1002,23 @@ function Instalar-Si-Falta {
 
     $script:popupCancelado = $false
     $script:pop = Nuevo-Popup 'Preparando MusicDL' "Primera vez: se descargan yt-dlp, FFmpeg, Deno y spotDL desde internet.`nFFmpeg ocupa ~100 MB. Verás el progreso abajo. Puedes pulsar CANCELAR." $true
-    $script:pop.form.ShowInTaskbar = $true
-    $script:pop.form.Add_Shown({
-        $script:pop.paso.Text = 'Iniciando instalación...'
-        if ($script:pop.pct) { $script:pop.pct.Text = '' }
-        Poner-Popup-Barra $null
-        try { $script:pop.paso.Refresh(); $script:pop.form.Refresh() } catch {}
-        # Timer de un disparo (BeginInvoke/Action falla a menudo en PowerShell WinForms)
+    # Capturas locales: en eventos de WinForms $script:pop a veces llega nulo y el Shown aborta sin descargar.
+    $popForm = $script:pop.form
+    $popPaso = $script:pop.paso
+    $popPct = $script:pop.pct
+    $popForm.ShowInTaskbar = $true
+    $script:installStarted = $false
+    $arrancarInstalacion = {
+        if ($script:installStarted) { return }
+        $script:installStarted = $true
+        try {
+            if ($popPaso -and -not $popPaso.IsDisposed) { $popPaso.Text = 'Iniciando instalación...' }
+            if ($popPct -and -not $popPct.IsDisposed) { $popPct.Text = '' }
+            Poner-Popup-Barra $null
+            try { if ($popPaso) { $popPaso.Refresh() }; if ($popForm) { $popForm.Refresh() } } catch {}
+        } catch {
+            Registrar-Error "Instalación UI: $($_.Exception.Message)"
+        }
         if ($script:timerInstalar) { try { $script:timerInstalar.Stop(); $script:timerInstalar.Dispose() } catch {} }
         $script:timerInstalar = New-Object System.Windows.Forms.Timer
         $script:timerInstalar.Interval = 80
@@ -1011,15 +1028,18 @@ function Instalar-Si-Falta {
             } catch {}
             try {
                 $i = 0
-                $todas = @(Faltan)
+                $todas = @($script:herramientas | Where-Object { -not (Ruta-De $_.cmd) })
+                if ($todas.Count -eq 0) { $todas = @(Faltan) }
                 $totalPasos = [Math]::Max($todas.Count, 1)
                 foreach ($h in $todas) {
                     if ($script:popupCancelado) { break }
                     $i++
-                    $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
-                    if ($script:pop.pct) { $script:pop.pct.Text = '' }
+                    if ($script:pop -and $script:pop.paso) {
+                        $script:pop.paso.Text = "Paso $i de $totalPasos : conectando ($($h.nombre))..."
+                        if ($script:pop.pct) { $script:pop.pct.Text = '' }
+                    }
                     Poner-Popup-Barra $null
-                    try { $script:pop.paso.Refresh() } catch {}
+                    try { if ($script:pop -and $script:pop.paso) { $script:pop.paso.Refresh() } } catch {}
                     [System.Windows.Forms.Application]::DoEvents()
                     $ok = Instalar-Herramienta-Directa $h
                     if ($script:popupCancelado) { break }
@@ -1027,7 +1047,9 @@ function Instalar-Si-Falta {
                         $wg = Ruta-De 'winget'
                         if (-not $wg) { $wg = (Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
                         if ($wg -and $h.id) {
-                            $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
+                            if ($script:pop -and $script:pop.paso) {
+                                $script:pop.paso.Text = "Paso $i de $totalPasos : intentando con el instalador de Windows..."
+                            }
                             [System.Windows.Forms.Application]::DoEvents()
                             try {
                                 Start-Process -FilePath $wg -ArgumentList "install --id $($h.id) -e --silent --accept-source-agreements --accept-package-agreements" -Wait -NoNewWindow
@@ -1043,8 +1065,27 @@ function Instalar-Si-Falta {
             }
         })
         $script:timerInstalar.Start()
+    }
+    $popForm.Add_Shown({
+        try {
+            & $arrancarInstalacion
+        } catch {
+            Registrar-Error "Instalación Shown: $($_.Exception.Message)"
+            try { & $arrancarInstalacion } catch { Registrar-Error "Instalación retry: $($_.Exception.Message)"; try { Cerrar-Popup } catch {} }
+        }
     })
-    [void]$script:pop.form.ShowDialog()
+    # Respaldo: si Shown falla/no dispara, arrancar igual a los 200 ms
+    $script:timerInstalarWatchdog = New-Object System.Windows.Forms.Timer
+    $script:timerInstalarWatchdog.Interval = 200
+    $script:timerInstalarWatchdog.Add_Tick({
+        try { $script:timerInstalarWatchdog.Stop(); $script:timerInstalarWatchdog.Dispose(); $script:timerInstalarWatchdog = $null } catch {}
+        if (-not $script:installStarted) {
+            try { & $arrancarInstalacion } catch { Registrar-Error "Watchdog instalación: $($_.Exception.Message)" }
+        }
+    })
+    $script:timerInstalarWatchdog.Start()
+    [void]$popForm.ShowDialog()
+    try { if ($script:timerInstalarWatchdog) { $script:timerInstalarWatchdog.Stop(); $script:timerInstalarWatchdog.Dispose(); $script:timerInstalarWatchdog = $null } } catch {}
 
     Refrescar-Path
     if ($script:popupCancelado) {
@@ -1083,7 +1124,7 @@ function Actualizar-Herramientas-Directas([switch]$Forzar) {
     $lblAct.Text = 'Actualizando yt-dlp...'
     try { [System.Windows.Forms.Application]::DoEvents() } catch {}
     $ok = $false
-    $h = $herramientas | Where-Object { $_.cmd -eq 'yt-dlp' } | Select-Object -First 1
+    $h = $script:herramientas | Where-Object { $_.cmd -eq 'yt-dlp' } | Select-Object -First 1
     if ($h) {
         try { $ok = Instalar-Herramienta-Directa $h } catch {
             Registrar-Error "Actualizar yt-dlp (directa): $($_.Exception.Message)"
@@ -3457,13 +3498,13 @@ $form.Add_Shown({
         Marcar-Arranque-Ok
         if ($script:hayWin) {
             $pasoUi = 'tema'
-            try { [DMWin]::TemaOscuro($form.Handle) } catch {}
-            try { [DMWin]::TemaOscuro($txtEnlace.Handle) } catch {}
-            try { [DMWin]::TemaOscuro($txtCarpeta.Handle) } catch {}
-            try { [DMWin]::TemaOscuro($txtNuevaLista.Handle) } catch {}
-            try { [DMWin]::TemaOscuro($lstResultados.Handle) } catch {}
-            try { [DMWin]::TemaOscuro($lvListas.Handle) } catch {}
-            try { [DMWin]::Pista($txtNuevaLista.Handle, 'Pega aquí el enlace de una lista') } catch {}
+            try { if ($form -and $form.Handle) { [DMWin]::TemaOscuro($form.Handle) } } catch {}
+            try { if ($txtEnlace) { [DMWin]::TemaOscuro($txtEnlace.Handle) } } catch {}
+            try { if ($txtCarpeta) { [DMWin]::TemaOscuro($txtCarpeta.Handle) } } catch {}
+            try { if ($txtNuevaLista) { [DMWin]::TemaOscuro($txtNuevaLista.Handle) } } catch {}
+            try { if ($lstResultados) { [DMWin]::TemaOscuro($lstResultados.Handle) } } catch {}
+            try { if ($lvListas) { [DMWin]::TemaOscuro($lvListas.Handle) } } catch {}
+            try { if ($txtNuevaLista) { [DMWin]::Pista($txtNuevaLista.Handle, 'Pega aquí el enlace de una lista') } } catch {}
         }
         $pasoUi = 'acceso'
         Crear-Acceso
@@ -3474,7 +3515,7 @@ $form.Add_Shown({
         $pasoUi = 'cola'
         Pintar-Cola
         try { Refrescar-Path } catch {}
-        $lblAct.Text = 'Todo listo'
+        if ($lblAct) { $lblAct.Text = 'Todo listo' }
 
         if ($script:timerAct) { try { $script:timerAct.Stop(); $script:timerAct.Dispose() } catch {} }
         $script:timerAct = New-Object System.Windows.Forms.Timer
@@ -3482,11 +3523,11 @@ $form.Add_Shown({
         $script:timerAct.Add_Tick({
             try {
                 if ($script:timerAct) { $script:timerAct.Stop() }
-                $lblAct.Text = 'Comprobando descargador...'
+                if ($lblAct) { $lblAct.Text = 'Comprobando descargador...' }
                 [System.Windows.Forms.Application]::DoEvents()
                 Actualizar-Herramientas-Directas
             } catch {
-                $lblAct.Text = 'Todo al día'
+                if ($lblAct) { $lblAct.Text = 'Todo al día' }
                 Registrar-Error "Timer actualización: $($_.Exception.Message)"
             }
         })
@@ -3502,10 +3543,10 @@ $form.Add_Shown({
         })
         $script:timerCheckApp.Start()
 
-        if ($config.ventanaMini) { Mostrar-Mini }
+        if ($config -and $config.ventanaMini) { Mostrar-Mini }
     } catch {
         Registrar-Error "Al mostrar ventana ($pasoUi): $($_.Exception.Message)"
-        try { $lblAct.Text = 'Listo' } catch {}
+        try { if ($lblAct) { $lblAct.Text = 'Listo' } } catch {}
     }
 })
 
